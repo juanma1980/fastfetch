@@ -1398,6 +1398,11 @@ install(
     DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/${CMAKE_PROJECT_NAME}"
 )
 
+install(
+    FILES "${CMAKE_SOURCE_DIR}/extras/lliurex-release"
+    DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/extras"
+)
+
 if(INSTALL_LICENSE)
     install(
         FILES "${CMAKE_SOURCE_DIR}/LICENSE"
