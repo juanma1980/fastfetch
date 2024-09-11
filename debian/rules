@@ -4,4 +4,4 @@
 	dh $@ --buildsystem=cmake+ninja
 
 override_dh_ctest_configure:
-	dh_ctest_configure -- -DSET_TWEAK=OFF -DBUILD_TESTS=ON -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCUSTOM_OS_RELEASE_PATH=${CMAKE_INSTALL_DATAROOTDIR}/extras/lliurex-release
+	dh_ctest_configure -- -DSET_TWEAK=OFF -DBUILD_TESTS=ON -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCUSTOM_OS_RELEASE_PATH=extras/lliurex-release
