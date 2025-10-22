@@ -1,0 +1,13 @@
+PRETTY_NAME="LliureX 25"
+NAME="LliureX 25"
+VERSION_ID="25.01"
+VERSION="GVA Edition"
+VERSION_CODENAME=noble
+ID=ubuntu
+ID_LIKE="ubuntu debian"
+HOME_URL="https://lliurex.net/"
+SUPPORT_URL="https://lliurex.net/"
+BUG_REPORT_URL="https://github.com/lliurex"
+PRIVACY_POLICY_URL="https://lliurex.net"
+UBUNTU_CODENAME=noble
+LOGO=lliurex
