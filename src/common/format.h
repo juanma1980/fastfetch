@@ -2,7 +2,7 @@
 
 #include "util/FFstrbuf.h"
 
-typedef enum FFformatArgType
+typedef enum __attribute__((__packed__)) FFformatArgType
 {
     FF_FORMAT_ARG_TYPE_NULL = 0,
     FF_FORMAT_ARG_TYPE_UINT,
@@ -42,7 +42,5 @@ typedef struct FFformatarg
 
 void ffFormatAppendFormatArg(FFstrbuf* buffer, const FFformatarg* formatarg);
 void ffParseFormatString(FFstrbuf* buffer, const FFstrbuf* formatstr, uint32_t numArgs, const FFformatarg* arguments);
-#define FF_PARSE_FORMAT_STRING_CHECKED(buffer, formatstr, numArgs, arguments) do {\
-    static_assert(sizeof(arguments) / sizeof(*(arguments)) == (numArgs), "Invalid number of format arguments");\
-    ffParseFormatString((buffer), (formatstr), (numArgs), (arguments));\
-} while (0)
+#define FF_PARSE_FORMAT_STRING_CHECKED(buffer, formatstr, arguments) \
+    ffParseFormatString((buffer), (formatstr), sizeof(arguments) / sizeof(*arguments), (arguments));

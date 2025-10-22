@@ -5,7 +5,6 @@
 #include "util/stringUtils.h"
 
 #define FF_TERMINALSIZE_DISPLAY_NAME "Terminal Size"
-#define FF_TERMINALSIZE_NUM_FORMAT_ARGS 4
 
 void ffPrintTerminalSize(FFTerminalSizeOptions* options)
 {
@@ -29,7 +28,7 @@ void ffPrintTerminalSize(FFTerminalSizeOptions* options)
         }
         else
         {
-            FF_PRINT_FORMAT_CHECKED(FF_TERMINALSIZE_DISPLAY_NAME, 0, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, FF_TERMINALSIZE_NUM_FORMAT_ARGS, ((FFformatarg[]){
+            FF_PRINT_FORMAT_CHECKED(FF_TERMINALSIZE_DISPLAY_NAME, 0, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, ((FFformatarg[]){
                 FF_FORMAT_ARG(result.rows, "rows"),
                 FF_FORMAT_ARG(result.columns, "columns"),
                 FF_FORMAT_ARG(result.width, "width"),
@@ -39,30 +38,16 @@ void ffPrintTerminalSize(FFTerminalSizeOptions* options)
     }
 }
 
-bool ffParseTerminalSizeCommandOptions(FFTerminalSizeOptions* options, const char* key, const char* value)
-{
-    const char* subKey = ffOptionTestPrefix(key, FF_TERMINALSIZE_MODULE_NAME);
-    if (!subKey) return false;
-    if (ffOptionParseModuleArgs(key, subKey, value, &options->moduleArgs))
-        return true;
-
-    return false;
-}
-
 void ffParseTerminalSizeJsonObject(FFTerminalSizeOptions* options, yyjson_val* module)
 {
-    yyjson_val *key_, *val;
+    yyjson_val *key, *val;
     size_t idx, max;
-    yyjson_obj_foreach(module, idx, max, key_, val)
+    yyjson_obj_foreach(module, idx, max, key, val)
     {
-        const char* key = yyjson_get_str(key_);
-        if(ffStrEqualsIgnCase(key, "type"))
-            continue;
-
         if (ffJsonConfigParseModuleArgs(key, val, &options->moduleArgs))
             continue;
 
-        ffPrintError(FF_TERMINALSIZE_MODULE_NAME, 0, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, "Unknown JSON key %s", key);
+        ffPrintError(FF_TERMINALSIZE_MODULE_NAME, 0, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, "Unknown JSON key %s", unsafe_yyjson_get_str(key));
     }
 }
 
@@ -74,7 +59,7 @@ void ffGenerateTerminalSizeJsonConfig(FFTerminalSizeOptions* options, yyjson_mut
     ffJsonConfigGenerateModuleArgsConfig(doc, module, &defaultOptions.moduleArgs, &options->moduleArgs);
 }
 
-void ffGenerateTerminalSizeJsonResult(FF_MAYBE_UNUSED FFTerminalOptions* options, yyjson_mut_doc* doc, yyjson_mut_val* module)
+void ffGenerateTerminalSizeJsonResult(FF_MAYBE_UNUSED FFTerminalSizeOptions* options, yyjson_mut_doc* doc, yyjson_mut_val* module)
 {
     FFTerminalSizeResult result;
 
@@ -91,29 +76,8 @@ void ffGenerateTerminalSizeJsonResult(FF_MAYBE_UNUSED FFTerminalOptions* options
     yyjson_mut_obj_add_uint(doc, obj, "height", result.height);
 }
 
-void ffPrintTerminalSizeHelpFormat(void)
-{
-    FF_PRINT_MODULE_FORMAT_HELP_CHECKED(FF_TERMINALSIZE_MODULE_NAME, "{1} columns x {2} rows ({3}px x {4}px)", FF_TERMINALSIZE_NUM_FORMAT_ARGS, ((const char* []) {
-        "Terminal rows - rows",
-        "Terminal columns - columns",
-        "Terminal width (in pixels) - width",
-        "Terminal height (in pixels) - height",
-    }));
-}
-
 void ffInitTerminalSizeOptions(FFTerminalSizeOptions* options)
 {
-    ffOptionInitModuleBaseInfo(
-        &options->moduleInfo,
-        FF_TERMINALSIZE_MODULE_NAME,
-        "Print current terminal size",
-        ffParseTerminalSizeCommandOptions,
-        ffParseTerminalSizeJsonObject,
-        ffPrintTerminalSize,
-        ffGenerateTerminalSizeJsonResult,
-        ffPrintTerminalSizeHelpFormat,
-        ffGenerateTerminalSizeJsonConfig
-    );
     ffOptionInitModuleArg(&options->moduleArgs, "󰲎");
 }
 
@@ -121,3 +85,20 @@ void ffDestroyTerminalSizeOptions(FFTerminalSizeOptions* options)
 {
     ffOptionDestroyModuleArg(&options->moduleArgs);
 }
+
+FFModuleBaseInfo ffTerminalSizeModuleInfo = {
+    .name = FF_TERMINALSIZE_MODULE_NAME,
+    .description = "Print current terminal size",
+    .initOptions = (void*) ffInitTerminalSizeOptions,
+    .destroyOptions = (void*) ffDestroyTerminalSizeOptions,
+    .parseJsonObject = (void*) ffParseTerminalSizeJsonObject,
+    .printModule = (void*) ffPrintTerminalSize,
+    .generateJsonResult = (void*) ffGenerateTerminalSizeJsonResult,
+    .generateJsonConfig = (void*) ffGenerateTerminalSizeJsonConfig,
+    .formatArgs = FF_FORMAT_ARG_LIST(((FFModuleFormatArg[]) {
+        {"Terminal rows", "rows"},
+        {"Terminal columns", "columns"},
+        {"Terminal width (in pixels)", "width"},
+        {"Terminal height (in pixels)", "height"},
+    })),
+};

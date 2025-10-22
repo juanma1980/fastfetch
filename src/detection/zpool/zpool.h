@@ -1,6 +1,7 @@
 #pragma once
 
 #include "fastfetch.h"
+#include "modules/zpool/option.h"
 
 typedef struct FFZpoolResult
 {
@@ -9,7 +10,7 @@ typedef struct FFZpoolResult
     uint64_t used;
     uint64_t total;
     uint64_t version;
-    uint64_t fragmentation;
+    double fragmentation;
 } FFZpoolResult;
 
 const char* ffDetectZpool(FFlist* result /* list of FFZpoolResult */);

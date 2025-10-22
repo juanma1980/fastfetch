@@ -7,8 +7,6 @@
 
 #pragma GCC diagnostic ignored "-Wformat" // warning: unknown conversion type character 'F' in format
 
-#define FF_USERS_NUM_FORMAT_ARGS 5
-
 void ffPrintUsers(FFUsersOptions* options)
 {
     FF_LIST_AUTO_DESTROY users = ffListCreate(sizeof(FFUserResult));
@@ -38,7 +36,7 @@ void ffPrintUsers(FFUsersOptions* options)
             {
                 if(i > 0)
                     ffStrbufAppendS(&result, ", ");
-                FFUserResult* user = (FFUserResult*)ffListGet(&users, i);
+                FFUserResult* user = FF_LIST_GET(FFUserResult, users, i);
                 ffStrbufAppend(&result, &user->name);
             }
             ffStrbufPutTo(&result, stdout);
@@ -47,7 +45,7 @@ void ffPrintUsers(FFUsersOptions* options)
         {
             for(uint32_t i = 0; i < users.length; ++i)
             {
-                FFUserResult* user = (FFUserResult*)ffListGet(&users, i);
+                FFUserResult* user = FF_LIST_GET(FFUserResult, users, i);
 
                 ffPrintLogoAndKey(FF_USERS_MODULE_NAME, users.length == 1 ? 0 : (uint8_t) (i + 1), &options->moduleArgs, FF_PRINT_TYPE_DEFAULT);
 
@@ -64,16 +62,38 @@ void ffPrintUsers(FFUsersOptions* options)
     }
     else
     {
+        uint64_t now = ffTimeGetNow();
         for(uint32_t i = 0; i < users.length; ++i)
         {
-            FFUserResult* user = (FFUserResult*)ffListGet(&users, i);
+            FFUserResult* user = FF_LIST_GET(FFUserResult, users, i);
 
-            FF_PRINT_FORMAT_CHECKED(FF_USERS_MODULE_NAME, users.length == 1 ? 0 : (uint8_t) (i + 1), &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, FF_USERS_NUM_FORMAT_ARGS, ((FFformatarg[]){
+            uint64_t duration = now - user->loginTime;
+            uint32_t milliseconds = (uint32_t) (duration % 1000);
+            duration /= 1000;
+            uint32_t seconds = (uint32_t) (duration % 60);
+            duration /= 60;
+            uint32_t minutes = (uint32_t) (duration % 60);
+            duration /= 60;
+            uint32_t hours = (uint32_t) (duration % 24);
+            duration /= 24;
+            uint32_t days = (uint32_t) duration;
+
+            FFTimeGetAgeResult age = ffTimeGetAge(user->loginTime, ffTimeGetNow());
+
+            FF_PRINT_FORMAT_CHECKED(FF_USERS_MODULE_NAME, users.length == 1 ? 0 : (uint8_t) (i + 1), &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, ((FFformatarg[]){
                 FF_FORMAT_ARG(user->name, "name"),
                 FF_FORMAT_ARG(user->hostName, "host-name"),
                 FF_FORMAT_ARG(user->sessionName, "session-name"),
                 FF_FORMAT_ARG(user->clientIp, "client-ip"),
                 {FF_FORMAT_ARG_TYPE_STRING, ffTimeToShortStr(user->loginTime), "login-time"},
+                FF_FORMAT_ARG(days, "days"),
+                FF_FORMAT_ARG(hours, "hours"),
+                FF_FORMAT_ARG(minutes, "minutes"),
+                FF_FORMAT_ARG(seconds, "seconds"),
+                FF_FORMAT_ARG(milliseconds, "milliseconds"),
+                FF_FORMAT_ARG(age.years, "years"),
+                FF_FORMAT_ARG(age.daysOfYear, "days-of-year"),
+                FF_FORMAT_ARG(age.yearsFraction, "years-fraction"),
             }));
         }
     }
@@ -87,54 +107,31 @@ void ffPrintUsers(FFUsersOptions* options)
     }
 }
 
-bool ffParseUsersCommandOptions(FFUsersOptions* options, const char* key, const char* value)
-{
-    const char* subKey = ffOptionTestPrefix(key, FF_USERS_MODULE_NAME);
-    if (!subKey) return false;
-    if (ffOptionParseModuleArgs(key, subKey, value, &options->moduleArgs))
-        return true;
-
-    if (ffStrEqualsIgnCase(subKey, "compact"))
-    {
-        options->compact = ffOptionParseBoolean(value);
-        return true;
-    }
-
-    if (ffStrEqualsIgnCase(subKey, "myself-only"))
-    {
-        options->myselfOnly = ffOptionParseBoolean(value);
-        return true;
-    }
-
-    return false;
-}
-
 void ffParseUsersJsonObject(FFUsersOptions* options, yyjson_val* module)
 {
-    yyjson_val *key_, *val;
+    yyjson_val *key, *val;
     size_t idx, max;
-    yyjson_obj_foreach(module, idx, max, key_, val)
+    yyjson_obj_foreach(module, idx, max, key, val)
     {
-        const char* key = yyjson_get_str(key_);
-        if (ffStrEqualsIgnCase(key, "type"))
+        if (unsafe_yyjson_equals_str(key, "type") || unsafe_yyjson_equals_str(key, "condition"))
             continue;
 
         if (ffJsonConfigParseModuleArgs(key, val, &options->moduleArgs))
             continue;
 
-        if (ffStrEqualsIgnCase(key, "compact"))
+        if (unsafe_yyjson_equals_str(key, "compact"))
         {
             options->compact = yyjson_get_bool(val);
             continue;
         }
 
-        if (ffStrEqualsIgnCase(key, "myselfOnly"))
+        if (unsafe_yyjson_equals_str(key, "myselfOnly"))
         {
             options->myselfOnly = yyjson_get_bool(val);
             continue;
         }
 
-        ffPrintError(FF_USERS_MODULE_NAME, 0, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, "Unknown JSON key %s", key);
+        ffPrintError(FF_USERS_MODULE_NAME, 0, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, "Unknown JSON key %s", unsafe_yyjson_get_str(key));
     }
 }
 
@@ -188,30 +185,8 @@ void ffGenerateUsersJsonResult(FFUsersOptions* options, yyjson_mut_doc* doc, yyj
     }
 }
 
-void ffPrintUsersHelpFormat(void)
-{
-    FF_PRINT_MODULE_FORMAT_HELP_CHECKED(FF_USERS_MODULE_NAME, "{1}@{2} - login time {5}", FF_USERS_NUM_FORMAT_ARGS, ((const char* []) {
-        "User name - user-name",
-        "Host name - host-name",
-        "Session name - session",
-        "Client IP - client-ip",
-        "Login Time in local timezone - login-time",
-    }));
-}
-
 void ffInitUsersOptions(FFUsersOptions* options)
 {
-    ffOptionInitModuleBaseInfo(
-        &options->moduleInfo,
-        FF_USERS_MODULE_NAME,
-        "Print users currently logged in",
-        ffParseUsersCommandOptions,
-        ffParseUsersJsonObject,
-        ffPrintUsers,
-        ffGenerateUsersJsonResult,
-        ffPrintUsersHelpFormat,
-        ffGenerateUsersJsonConfig
-    );
     ffOptionInitModuleArg(&options->moduleArgs, "");
 
     options->compact = false;
@@ -222,3 +197,29 @@ void ffDestroyUsersOptions(FFUsersOptions* options)
 {
     ffOptionDestroyModuleArg(&options->moduleArgs);
 }
+
+FFModuleBaseInfo ffUsersModuleInfo = {
+    .name = FF_USERS_MODULE_NAME,
+    .description = "Print users currently logged in",
+    .initOptions = (void*) ffInitUsersOptions,
+    .destroyOptions = (void*) ffDestroyUsersOptions,
+    .parseJsonObject = (void*) ffParseUsersJsonObject,
+    .printModule = (void*) ffPrintUsers,
+    .generateJsonResult = (void*) ffGenerateUsersJsonResult,
+    .generateJsonConfig = (void*) ffGenerateUsersJsonConfig,
+    .formatArgs = FF_FORMAT_ARG_LIST(((FFModuleFormatArg[]) {
+        {"User name", "name"},
+        {"Host name", "host-name"},
+        {"Session name", "session-name"},
+        {"Client IP", "client-ip"},
+        {"Login Time in local timezone", "login-time"},
+        {"Days after login", "days"},
+        {"Hours after login", "hours"},
+        {"Minutes after login", "minutes"},
+        {"Seconds after login", "seconds"},
+        {"Milliseconds after login", "milliseconds"},
+        {"Years integer after login", "years"},
+        {"Days of year after login", "days-of-year"},
+        {"Years fraction after login", "years-fraction"},
+    }))
+};

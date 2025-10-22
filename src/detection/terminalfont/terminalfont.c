@@ -48,6 +48,31 @@ static void detectAlacritty(FFTerminalFontResult* terminalFont)
     ffFontInitValues(&terminalFont->font, fontName.chars, fontSize.chars);
 }
 
+static void detectGhostty(FFTerminalFontResult* terminalFont)
+{
+    FF_STRBUF_AUTO_DESTROY fontName = ffStrbufCreate();
+    FF_STRBUF_AUTO_DESTROY fontSize = ffStrbufCreate();
+
+    FFpropquery fontQueryToml[] = {
+        {"font-family =", &fontName},
+        {"font-size =", &fontSize},
+    };
+
+    #if __APPLE__
+    ffParsePropFileConfigValues("com.mitchellh.ghostty/config", 2, fontQueryToml);
+    #endif
+
+    ffParsePropFileConfigValues("ghostty/config", 2, fontQueryToml);
+
+    if(fontName.length == 0)
+        ffStrbufAppendS(&fontName, "JetBrainsMono Nerd Font");
+
+    if(fontSize.length == 0)
+        ffStrbufAppendS(&fontSize, "13");
+
+    ffFontInitValues(&terminalFont->font, fontName.chars, fontSize.chars);
+}
+
 FF_MAYBE_UNUSED static void detectTTY(FFTerminalFontResult* terminalFont)
 {
     FF_STRBUF_AUTO_DESTROY fontName = ffStrbufCreate();
@@ -82,7 +107,7 @@ FF_MAYBE_UNUSED static bool detectKitty(const FFstrbuf* exe, FFTerminalFontResul
     if (ffGetTerminalResponse(
         "\eP+q6b697474792d71756572792d666f6e745f66616d696c79;6b697474792d71756572792d666f6e745f73697a65\e\\", // kitty-query-font_family;kitty-query-font_size
         2,
-        "\eP1+r%*[^=]=%64[^\e]\e\\\eP1+r%*[^=]=%64[^\e]\e\\", fontHex, sizeHex) == NULL && *fontHex && *sizeHex)
+        "\eP1+r%*[^=]=%511[^\e]\e\\\eP1+r%*[^=]=%511[^\e]\e\\", fontHex, sizeHex) == NULL && *fontHex && *sizeHex)
     {
         // decode hex string
         for (const char* p = fontHex; p[0] && p[1]; p += 2)
@@ -218,6 +243,29 @@ static bool detectContour(const FFstrbuf* exe, FFTerminalFontResult* result)
     return true;
 }
 
+static bool detectRio(FFTerminalFontResult* terminalFont)
+{
+    FF_STRBUF_AUTO_DESTROY fontName = ffStrbufCreate();
+    FF_STRBUF_AUTO_DESTROY fontSize = ffStrbufCreate();
+
+    FFpropquery fontQueryToml[] = {
+        {"family =", &fontName},
+        {"size =", &fontSize},
+    };
+
+    ffParsePropFileConfigValues("rio/config.toml", 2, fontQueryToml);
+
+    if(fontName.length == 0)
+        ffStrbufAppendS(&fontName, "Cascadia Code");
+
+    if(fontSize.length == 0)
+        ffStrbufAppendS(&fontSize, "18");
+
+    ffFontInitValues(&terminalFont->font, fontName.chars, fontSize.chars);
+
+    return true;
+}
+
 void ffDetectTerminalFontPlatform(const FFTerminalResult* terminal, FFTerminalFontResult* terminalFont);
 
 static bool detectTerminalFontCommon(const FFTerminalResult* terminal, FFTerminalFontResult* terminalFont)
@@ -230,6 +278,10 @@ static bool detectTerminalFontCommon(const FFTerminalResult* terminal, FFTermina
         detectTabby(terminalFont);
     else if(ffStrbufStartsWithIgnCaseS(&terminal->processName, "contour"))
         detectContour(&terminal->exe, terminalFont);
+    else if(ffStrbufStartsWithIgnCaseS(&terminal->processName, "ghostty"))
+        detectGhostty(terminalFont);
+    else if(ffStrbufStartsWithIgnCaseS(&terminal->processName, "rio"))
+        detectRio(terminalFont);
 
     #ifndef _WIN32
     else if(ffStrbufStartsWithIgnCaseS(&terminal->exe, "/dev/pts/"))

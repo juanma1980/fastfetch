@@ -1,5 +1,6 @@
 #include "fastfetch.h"
 #include "common/printing.h"
+#include "logo/logo.h"
 #include "util/textModifier.h"
 
 void ffPrintLogoAndKey(const char* moduleName, uint8_t moduleIndex, const FFModuleArgs* moduleArgs, FFPrintType printType)
@@ -50,7 +51,7 @@ void ffPrintLogoAndKey(const char* moduleName, uint8_t moduleIndex, const FFModu
             else
             {
                 FF_STRBUF_AUTO_DESTROY key = ffStrbufCreate();
-                FF_PARSE_FORMAT_STRING_CHECKED(&key, &moduleArgs->key, 2, ((FFformatarg[]){
+                FF_PARSE_FORMAT_STRING_CHECKED(&key, &moduleArgs->key, ((FFformatarg[]) {
                     FF_FORMAT_ARG(moduleIndex, "index"),
                     FF_FORMAT_ARG(moduleArgs->keyIcon, "icon"),
                 }));
@@ -99,7 +100,7 @@ void ffPrintFormat(const char* moduleName, uint8_t moduleIndex, const FFModuleAr
     ffStrbufPutTo(&buffer, stdout);
 }
 
-static void printError(const char* moduleName, uint8_t moduleIndex, const FFModuleArgs* moduleArgs, FFPrintType printType, const char* message, va_list arguments)
+void ffPrintError(const char* moduleName, uint8_t moduleIndex, const FFModuleArgs* moduleArgs, FFPrintType printType, const char* message, ...)
 {
     if(!instance.config.display.showErrors)
         return;
@@ -109,20 +110,15 @@ static void printError(const char* moduleName, uint8_t moduleIndex, const FFModu
     if(!instance.config.display.pipe)
         fputs(FASTFETCH_TEXT_MODIFIER_ERROR, stdout);
 
+    va_list arguments;
+    va_start(arguments, message);
     vprintf(message, arguments);
+    va_end(arguments);
 
     if(!instance.config.display.pipe)
         fputs(FASTFETCH_TEXT_MODIFIER_RESET, stdout);
 
     putchar('\n');
-}
-
-void ffPrintError(const char* moduleName, uint8_t moduleIndex, const FFModuleArgs* moduleArgs, FFPrintType printType, const char* message, ...)
-{
-    va_list arguments;
-    va_start(arguments, message);
-    printError(moduleName, moduleIndex, moduleArgs, printType, message, arguments);
-    va_end(arguments);
 }
 
 void ffPrintColor(const FFstrbuf* colorValue)
@@ -147,19 +143,4 @@ void ffPrintCharTimes(char c, uint32_t times)
     uint32_t remaining = times % sizeof(str);
     if(remaining > 0)
         fwrite(str, 1, remaining, stdout);
-}
-
-void ffPrintModuleFormatHelp(const char* name, const char* def, uint32_t numArgs, const char* args[])
-{
-    FF_STRBUF_AUTO_DESTROY buffer = ffStrbufCreateS(name);
-    ffStrbufLowerCase(&buffer);
-    printf("--%s-format:\n", buffer.chars);
-    printf("Sets the format string for %s output.\n", name);
-    puts("To see how a format string is constructed, take a look at \"fastfetch --help format\".");
-    puts("The following values are passed:");
-
-    for(unsigned i = 0; i < numArgs; i++)
-        printf("        {%u}: %s\n", i + 1, args[i]);
-
-    printf("The default is something similar to \"%s\".\n", def);
 }

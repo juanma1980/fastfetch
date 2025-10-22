@@ -1,9 +1,122 @@
 #include "cpu.h"
-#include "detection/temps/temps_windows.h"
 #include "util/windows/registry.h"
 #include "util/windows/nt.h"
 #include "util/mallocHelper.h"
 #include "util/smbiosHelper.h"
+
+#include <windows.h>
+#include "util/windows/perflib_.h"
+#include <wchar.h>
+
+static inline void ffPerfCloseQueryHandle(HANDLE* phQuery)
+{
+    if (*phQuery != NULL)
+    {
+        PerfCloseQueryHandle(*phQuery);
+        *phQuery = NULL;
+    }
+}
+
+const char* detectThermalTemp(double* result)
+{
+    struct FFPerfQuerySpec
+    {
+        PERF_COUNTER_IDENTIFIER Identifier;
+        WCHAR Name[16];
+    } querySpec = {
+        .Identifier = {
+            // Thermal Zone Information
+            // HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Perflib\_V2Providers\{383487a6-3676-4870-a4e7-d45b30c35629}\{52bc5412-dac2-449c-8bc2-96443888fe6b}
+            .CounterSetGuid = { 0x52bc5412, 0xdac2, 0x449c, {0x8b, 0xc2, 0x96, 0x44, 0x38, 0x88, 0xfe, 0x6b} },
+            .Size = sizeof(querySpec),
+            .CounterId = PERF_WILDCARD_COUNTER,
+            .InstanceId = PERF_WILDCARD_COUNTER,
+        },
+        .Name = L"\\_TZ.CPUZ", // The standard(?) instance name for CPU temperature in the thermal provider
+    };
+
+    DWORD dataSize = 0;
+    if (PerfEnumerateCounterSetInstances(NULL, &querySpec.Identifier.CounterSetGuid, NULL, 0, &dataSize) != ERROR_NOT_ENOUGH_MEMORY)
+        return "PerfEnumerateCounterSetInstances() failed";
+
+    if (dataSize <= sizeof(PERF_INSTANCE_HEADER))
+        return "No `Thermal Zone Information` instances found";
+
+    {
+        FF_AUTO_FREE PERF_INSTANCE_HEADER* const pHead = malloc(dataSize);
+        if (PerfEnumerateCounterSetInstances(NULL, &querySpec.Identifier.CounterSetGuid, pHead, dataSize, &dataSize) != ERROR_SUCCESS)
+            return "PerfEnumerateCounterSetInstances() failed to get instance headers";
+
+        PERF_INSTANCE_HEADER* pInstanceHeader = pHead;
+        while (1)
+        {
+            const wchar_t* instanceName = (const wchar_t*)((BYTE*)pInstanceHeader + sizeof(*pInstanceHeader));
+            if (wcscmp(instanceName, querySpec.Name) == 0)
+                break;
+
+            dataSize -= pInstanceHeader->Size;
+            if (dataSize == 0)
+                break;
+            pInstanceHeader = (PERF_INSTANCE_HEADER*)((BYTE*)pInstanceHeader + pInstanceHeader->Size);
+        }
+
+        if (dataSize == 0)
+        {
+            const wchar_t* instanceName = (const wchar_t*)((BYTE*)pHead + sizeof(*pHead));
+            wcscpy(querySpec.Name, instanceName); // Use the first instance name if the specific one is not found
+        }
+    }
+
+    __attribute__((__cleanup__(ffPerfCloseQueryHandle)))
+    HANDLE hQuery = NULL;
+
+    if (PerfOpenQueryHandle(NULL, &hQuery) != ERROR_SUCCESS)
+        return "PerfOpenQueryHandle() failed";
+
+    if (PerfAddCounters(hQuery, &querySpec.Identifier, sizeof(querySpec)) != ERROR_SUCCESS)
+        return "PerfAddCounters() failed";
+
+    if (querySpec.Identifier.Status != ERROR_SUCCESS)
+        return "PerfAddCounters() reports invalid identifier";
+
+    if (PerfQueryCounterData(hQuery, NULL, 0, &dataSize) != ERROR_NOT_ENOUGH_MEMORY)
+        return "PerfQueryCounterData(NULL) failed";
+
+    if (dataSize <= sizeof(PERF_DATA_HEADER) + sizeof(PERF_COUNTER_HEADER)) // PERF_ERROR_RETURN, should not happen
+        return "instance doesn't exist";
+
+    FF_AUTO_FREE PERF_DATA_HEADER* const pDataHeader = malloc(dataSize);
+
+    if (PerfQueryCounterData(hQuery, pDataHeader, dataSize, &dataSize) != ERROR_SUCCESS)
+        return "PerfQueryCounterData(pDataHeader) failed";
+
+    PERF_COUNTER_HEADER* pCounterHeader = (PERF_COUNTER_HEADER*)(pDataHeader + 1);
+    if (pCounterHeader->dwType != PERF_MULTIPLE_COUNTERS)
+        return "Invalid counter type";
+
+    PERF_MULTI_COUNTERS* pMultiCounters = (PERF_MULTI_COUNTERS*)(pCounterHeader + 1);
+    PERF_COUNTER_DATA* pCounterData = (PERF_COUNTER_DATA*)((BYTE*)pMultiCounters + pMultiCounters->dwSize);
+
+    for (ULONG iCounter = 0; iCounter != pMultiCounters->dwCounters; iCounter++)
+    {
+        if (pCounterData->dwDataSize == sizeof(int32_t))
+        {
+            DWORD* pCounterIds = (DWORD*)(pMultiCounters + 1);
+            switch (pCounterIds[iCounter]) {
+            case 0: // Temperature
+                *result = *(int32_t*)(pCounterData + 1) - 273;
+                break;
+            case 3: // High Precision Temperature
+                *result = *(int32_t*)(pCounterData + 1) / 10.0 - 273;
+                break;
+            }
+        }
+
+        pCounterData = (PERF_COUNTER_DATA*)((BYTE*)pCounterData + pCounterData->dwSize);
+    }
+
+    return NULL;
+}
 
 // 7.5
 typedef struct FFSmbiosProcessorInfo
@@ -101,9 +214,7 @@ static const char* detectNCores(FFCPUResult* cpu)
         ptr = (SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*)(((uint8_t*)ptr) + ptr->Size)
     )
     {
-        if (ptr->Relationship == RelationProcessorCore)
-            ++cpu->coresPhysical;
-        else if (ptr->Relationship == RelationGroup)
+        if (ptr->Relationship == RelationGroup)
         {
             for (uint32_t index = 0; index < ptr->Group.ActiveGroupCount; ++index)
             {
@@ -111,6 +222,10 @@ static const char* detectNCores(FFCPUResult* cpu)
                 cpu->coresLogical += ptr->Group.GroupInfo[index].MaximumProcessorCount;
             }
         }
+        else if (ptr->Relationship == RelationProcessorCore)
+            ++cpu->coresPhysical;
+        else if (ptr->Relationship == RelationProcessorPackage)
+            ++cpu->packages;
     }
 
     return NULL;
@@ -127,9 +242,13 @@ static const char* detectByRegistry(FFCPUResult* cpu)
 
     if (cpu->coresLogical == 0)
     {
-        DWORD cores;
-        if (RegQueryInfoKeyW(HKEY_LOCAL_MACHINE, L"HARDWARE\\DESCRIPTION\\System\\CentralProcessor", NULL, NULL, &cores, NULL, NULL, NULL, NULL, NULL, NULL, NULL) == ERROR_SUCCESS)
-            cpu->coresOnline = cpu->coresPhysical = cpu->coresLogical = (uint16_t) cores;
+        FF_HKEY_AUTO_DESTROY hProcsKey = NULL;
+        if (ffRegOpenKeyForRead(HKEY_LOCAL_MACHINE, L"HARDWARE\\DESCRIPTION\\System\\CentralProcessor", &hProcsKey, NULL))
+        {
+            uint32_t cores;
+            if (ffRegGetNSubKeys(hProcsKey, &cores, NULL))
+                cpu->coresOnline = cpu->coresPhysical = cpu->coresLogical = (uint16_t) cores;
+        }
     }
 
     uint32_t mhz;
@@ -175,7 +294,7 @@ const char* ffDetectCPUImpl(const FFCPUOptions* options, FFCPUResult* cpu)
         detectMaxSpeedBySmbios(cpu);
 
     if(options->temp)
-        ffDetectSmbiosTemp(&cpu->temperature, NULL);
+        detectThermalTemp(&cpu->temperature);
 
     return NULL;
 }

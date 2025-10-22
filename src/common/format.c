@@ -32,20 +32,26 @@ void ffFormatAppendFormatArg(FFstrbuf* buffer, const FFformatarg* formatarg)
             ffStrbufAppend(buffer, (FFstrbuf*)formatarg->value);
             break;
         case FF_FORMAT_ARG_TYPE_FLOAT:
-            ffStrbufAppendF(buffer, "%f", *(float*)formatarg->value);
+            if (instance.config.display.fractionNdigits >= 0)
+                ffStrbufAppendF(buffer, "%.*f", instance.config.display.fractionNdigits, *(float*)formatarg->value);
+            else
+                ffStrbufAppendF(buffer, "%g", *(float*)formatarg->value);
             break;
         case FF_FORMAT_ARG_TYPE_DOUBLE:
-            ffStrbufAppendF(buffer, "%g", *(double*)formatarg->value);
+            if (instance.config.display.fractionNdigits >= 0)
+                ffStrbufAppendF(buffer, "%.*f", instance.config.display.fractionNdigits, *(double*)formatarg->value);
+            else
+                ffStrbufAppendF(buffer, "%g", *(double*)formatarg->value);
             break;
         case FF_FORMAT_ARG_TYPE_BOOL:
             ffStrbufAppendS(buffer, *(bool*)formatarg->value ? "true" : "false");
             break;
         case FF_FORMAT_ARG_TYPE_LIST:
         {
-            const FFlist* list = formatarg->value;
+            const FFlist* list = (const FFlist*) formatarg->value;
             for(uint32_t i = 0; i < list->length; i++)
             {
-                ffStrbufAppend(buffer, ffListGet(list, i));
+                ffStrbufAppend(buffer, FF_LIST_GET(FFstrbuf, *list, i));
                 if(i < list->length - 1)
                     ffStrbufAppendS(buffer, ", ");
             }
@@ -108,9 +114,10 @@ static inline bool formatArgSet(const FFformatarg* arg)
 {
     return arg->value != NULL && (
         (arg->type == FF_FORMAT_ARG_TYPE_DOUBLE && *(double*)arg->value > 0.0) || //Also is false for NaN
+        (arg->type == FF_FORMAT_ARG_TYPE_FLOAT && *(float*)arg->value > 0.0) || //Also is false for NaN
         (arg->type == FF_FORMAT_ARG_TYPE_INT && *(int*)arg->value > 0) ||
         (arg->type == FF_FORMAT_ARG_TYPE_STRBUF && ((FFstrbuf*)arg->value)->length > 0) ||
-        (arg->type == FF_FORMAT_ARG_TYPE_STRING && ffStrSet(arg->value)) ||
+        (arg->type == FF_FORMAT_ARG_TYPE_STRING && ffStrSet((char*)arg->value)) ||
         (arg->type == FF_FORMAT_ARG_TYPE_UINT8 && *(uint8_t*)arg->value > 0) ||
         (arg->type == FF_FORMAT_ARG_TYPE_UINT16 && *(uint16_t*)arg->value > 0) ||
         (arg->type == FF_FORMAT_ARG_TYPE_UINT && *(uint32_t*)arg->value > 0) ||
@@ -259,24 +266,33 @@ void ffParseFormatString(FFstrbuf* buffer, const FFstrbuf* formatstr, uint32_t n
             continue;
         }
 
-        //test for constant, if so evaluate it
+        //test for constant or env var, if so evaluate it
         if (firstChar == '$')
         {
             char* pend = NULL;
             int32_t indexSigned = (int32_t) strtol(placeholderValue.chars + 1, &pend, 10);
-            uint32_t index = (uint32_t) indexSigned;
-            bool backward = indexSigned < 0;
-
-            if (indexSigned == 0 || *pend != '\0' || instance.config.display.constants.length < index)
+            if (pend == placeholderValue.chars + 1)
             {
-                appendInvalidPlaceholder(buffer, "{", &placeholderValue, i, formatstr->length);
-                continue;
+                // treat placeholder as an environment variable
+                char* envValue = getenv(placeholderValue.chars + 1);
+                if (envValue)
+                    ffStrbufAppendS(buffer, envValue);
+                else
+                    appendInvalidPlaceholder(buffer, "{", &placeholderValue, i, formatstr->length);
             }
+            else
+            {
+                // treat placeholder as a constant
+                uint32_t index = (uint32_t) (indexSigned < 0 ? (int32_t) instance.config.display.constants.length + indexSigned : indexSigned - 1);
 
-            FFstrbuf* item = FF_LIST_GET(FFstrbuf, instance.config.display.constants, backward
-                ? instance.config.display.constants.length - index
-                : index - 1);
-            ffStrbufAppend(buffer, item);
+                if (*pend != '\0' || instance.config.display.constants.length <= index)
+                    appendInvalidPlaceholder(buffer, "{", &placeholderValue, i, formatstr->length);
+                else
+                {
+                    FFstrbuf* item = FF_LIST_GET(FFstrbuf, instance.config.display.constants, index);
+                    ffStrbufAppend(buffer, item);
+                }
+            }
             continue;
         }
 

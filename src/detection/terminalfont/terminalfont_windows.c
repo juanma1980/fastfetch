@@ -4,6 +4,8 @@
 #include "common/properties.h"
 #include "detection/terminalshell/terminalshell.h"
 #include "util/windows/unicode.h"
+#include "util/windows/registry.h"
+#include "util/stringUtils.h"
 #include "terminalfont.h"
 
 #include <shlobj.h>
@@ -21,16 +23,14 @@ static const char* detectWTProfile(yyjson_val* profile, FFstrbuf* name, double* 
 
     if (name->length == 0)
     {
-        yyjson_val* pface = yyjson_obj_get(font, "face");
-        if(yyjson_is_str(pface))
-            ffStrbufAppendS(name, unsafe_yyjson_get_str(pface));
+        ffStrbufAppendJsonVal(name, yyjson_obj_get(font, "face"));
     }
 
     if (*size < 0)
     {
         yyjson_val* psize = yyjson_obj_get(font, "size");
         if (yyjson_is_num(psize))
-            *size = yyjson_get_num(psize);
+            *size = unsafe_yyjson_get_num(psize);
     }
     return NULL;
 }
@@ -97,19 +97,18 @@ static void detectFromWindowsTerminal(const FFstrbuf* terminalExe, FFTerminalFon
     if(terminalExe && terminalExe->length > 0 && !ffStrbufEqualS(terminalExe, "Windows Terminal"))
     {
         char jsonPath[MAX_PATH + 1];
-        strncpy(jsonPath, terminalExe->chars, ffStrbufLastIndexC(terminalExe, '\\') + 1);
-        char* pathEnd = jsonPath + strlen(jsonPath);
-        strncpy(pathEnd, ".portable", sizeof(jsonPath) - (size_t) (pathEnd - jsonPath) - 1);
+        char* pathEnd = ffStrCopy(jsonPath, terminalExe->chars, ffStrbufLastIndexC(terminalExe, '\\') + 1);
+        ffStrCopy(pathEnd, ".portable", ARRAY_SIZE(jsonPath) - (size_t) (pathEnd - jsonPath) - 1);
 
         if(ffPathExists(jsonPath, FF_PATHTYPE_ANY))
         {
-            strncpy(pathEnd, "settings\\settings.json", sizeof(jsonPath) - (size_t) (pathEnd - jsonPath) - 1);
+            ffStrCopy(pathEnd, "settings\\settings.json", ARRAY_SIZE(jsonPath) - (size_t) (pathEnd - jsonPath) - 1);
             if(!ffAppendFileBuffer(jsonPath, &json))
                 error = "Error reading Windows Terminal portable settings JSON file";
         }
         else if(SUCCEEDED(SHGetFolderPathA(NULL, CSIDL_LOCAL_APPDATA, NULL, 0, jsonPath)))
         {
-            size_t remaining = sizeof(jsonPath) - strlen(jsonPath) - 1;
+            size_t remaining = ARRAY_SIZE(jsonPath) - strlen(jsonPath) - 1;
             if(ffStrbufContainIgnCaseS(terminalExe, "_8wekyb3d8bbwe\\"))
             {
                 // Microsoft Store version
@@ -175,7 +174,7 @@ static void detectFromWindowsTerminal(const FFstrbuf* terminalExe, FFTerminalFon
     else
     {
         char sizeStr[16];
-        snprintf(sizeStr, sizeof(sizeStr), "%g", size);
+        snprintf(sizeStr, ARRAY_SIZE(sizeStr), "%g", size);
         ffFontInitValues(&terminalFont->font, name.chars, sizeStr);
     }
 }
@@ -226,7 +225,7 @@ static void detectConEmu(FFTerminalFontResult* terminalFont)
     FF_STRBUF_AUTO_DESTROY fontSize = ffStrbufCreate();
 
     const char* paths[] = { "ConEmuDir", "ConEmuBaseDir", "APPDATA" };
-    for (uint32_t i = 0; i < sizeof(paths) / sizeof(paths[0]); ++i)
+    for (uint32_t i = 0; i < ARRAY_SIZE(paths); ++i)
     {
         ffStrbufSetS(&path, getenv(paths[i]));
         if(path.length > 0)
@@ -259,6 +258,22 @@ static void detectConEmu(FFTerminalFontResult* terminalFont)
     ffFontInitValues(&terminalFont->font, fontName.chars, fontSize.chars);
 }
 
+static void detectWarp(FFTerminalFontResult* terminalFont)
+{
+    FF_HKEY_AUTO_DESTROY key = NULL;
+    if (!ffRegOpenKeyForRead(HKEY_CURRENT_USER, L"Software\\Warp.dev\\Warp", &key, &terminalFont->error))
+        return;
+
+    FF_STRBUF_AUTO_DESTROY fontName = ffStrbufCreate();
+    FF_STRBUF_AUTO_DESTROY fontSize = ffStrbufCreate();
+    if (!ffRegReadStrbuf(key, L"FontName", &fontName, NULL))
+        ffStrbufSetS(&fontName, "Hack");
+    if (!ffRegReadStrbuf(key, L"FontSize", &fontSize, &terminalFont->error))
+        ffStrbufSetS(&fontSize, "13");
+
+    ffFontInitValues(&terminalFont->font, fontName.chars, fontSize.chars);
+}
+
 void ffDetectTerminalFontPlatform(const FFTerminalResult* terminal, FFTerminalFontResult* terminalFont)
 {
     if(ffStrbufIgnCaseEqualS(&terminal->processName, "Windows Terminal") ||
@@ -270,4 +285,6 @@ void ffDetectTerminalFontPlatform(const FFTerminalResult* terminal, FFTerminalFo
         detectConhost(terminalFont);
     else if(ffStrbufStartsWithIgnCaseS(&terminal->processName, "ConEmu"))
         detectConEmu(terminalFont);
+    else if(ffStrbufStartsWithIgnCaseS(&terminal->processName, "warp"))
+        detectWarp(terminalFont);
 }

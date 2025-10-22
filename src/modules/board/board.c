@@ -4,8 +4,6 @@
 #include "modules/board/board.h"
 #include "util/stringUtils.h"
 
-#define FF_BOARD_NUM_FORMAT_ARGS 4
-
 void ffPrintBoard(FFBoardOptions* options)
 {
     FFBoardResult result;
@@ -37,7 +35,7 @@ void ffPrintBoard(FFBoardOptions* options)
     }
     else
     {
-        FF_PRINT_FORMAT_CHECKED(FF_BOARD_MODULE_NAME, 0, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, FF_BOARD_NUM_FORMAT_ARGS, ((FFformatarg[]) {
+        FF_PRINT_FORMAT_CHECKED(FF_BOARD_MODULE_NAME, 0, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, ((FFformatarg[]) {
             FF_FORMAT_ARG(result.name, "name"),
             FF_FORMAT_ARG(result.vendor, "vendor"),
             FF_FORMAT_ARG(result.version, "version"),
@@ -52,30 +50,16 @@ exit:
     ffStrbufDestroy(&result.serial);
 }
 
-bool ffParseBoardCommandOptions(FFBoardOptions* options, const char* key, const char* value)
-{
-    const char* subKey = ffOptionTestPrefix(key, FF_BOARD_MODULE_NAME);
-    if (!subKey) return false;
-    if (ffOptionParseModuleArgs(key, subKey, value, &options->moduleArgs))
-        return true;
-
-    return false;
-}
-
 void ffParseBoardJsonObject(FFBoardOptions* options, yyjson_val* module)
 {
-    yyjson_val *key_, *val;
+    yyjson_val *key, *val;
     size_t idx, max;
-    yyjson_obj_foreach(module, idx, max, key_, val)
+    yyjson_obj_foreach(module, idx, max, key, val)
     {
-        const char* key = yyjson_get_str(key_);
-        if(ffStrEqualsIgnCase(key, "type"))
-            continue;
-
         if (ffJsonConfigParseModuleArgs(key, val, &options->moduleArgs))
             continue;
 
-        ffPrintError(FF_BOARD_MODULE_NAME, 0, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, "Unknown JSON key %s", key);
+        ffPrintError(FF_BOARD_MODULE_NAME, 0, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, "Unknown JSON key %s", unsafe_yyjson_get_str(key));
     }
 }
 
@@ -122,29 +106,8 @@ exit:
     ffStrbufDestroy(&board.serial);
 }
 
-void ffPrintBoardHelpFormat(void)
-{
-    FF_PRINT_MODULE_FORMAT_HELP_CHECKED(FF_BOARD_MODULE_NAME, "{1} ({3})", FF_BOARD_NUM_FORMAT_ARGS, ((const char* []) {
-        "board name - name",
-        "board vendor - vendor",
-        "board version - version",
-        "board serial number - serial",
-    }));
-}
-
 void ffInitBoardOptions(FFBoardOptions* options)
 {
-    ffOptionInitModuleBaseInfo(
-        &options->moduleInfo,
-        FF_BOARD_MODULE_NAME,
-        "Print motherboard name and other info",
-        ffParseBoardCommandOptions,
-        ffParseBoardJsonObject,
-        ffPrintBoard,
-        ffGenerateBoardJsonResult,
-        ffPrintBoardHelpFormat,
-        ffGenerateBoardJsonConfig
-    );
     ffOptionInitModuleArg(&options->moduleArgs, "");
 }
 
@@ -152,3 +115,20 @@ void ffDestroyBoardOptions(FFBoardOptions* options)
 {
     ffOptionDestroyModuleArg(&options->moduleArgs);
 }
+
+FFModuleBaseInfo ffBoardModuleInfo = {
+    .name = FF_BOARD_MODULE_NAME,
+    .description = "Print motherboard name and other info",
+    .initOptions = (void*) ffInitBoardOptions,
+    .destroyOptions = (void*) ffDestroyBoardOptions,
+    .parseJsonObject = (void*) ffParseBoardJsonObject,
+    .printModule = (void*) ffPrintBoard,
+    .generateJsonResult = (void*) ffGenerateBoardJsonResult,
+    .generateJsonConfig = (void*) ffGenerateBoardJsonConfig,
+    .formatArgs = FF_FORMAT_ARG_LIST(((FFModuleFormatArg[]) {
+        {"Board name", "name"},
+        {"Board vendor", "vendor"},
+        {"Board version", "version"},
+        {"Board serial number", "serial"},
+    }))
+};

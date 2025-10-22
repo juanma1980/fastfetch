@@ -4,8 +4,6 @@
 #include "modules/lm/lm.h"
 #include "util/stringUtils.h"
 
-#define FF_LM_NUM_FORMAT_ARGS 3
-
 void ffPrintLM(FFLMOptions* options)
 {
     FFLMResult result;
@@ -38,7 +36,7 @@ void ffPrintLM(FFLMOptions* options)
     }
     else
     {
-        FF_PRINT_FORMAT_CHECKED(FF_LM_MODULE_NAME, 0, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, FF_LM_NUM_FORMAT_ARGS, ((FFformatarg[]){
+        FF_PRINT_FORMAT_CHECKED(FF_LM_MODULE_NAME, 0, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, ((FFformatarg[]){
             FF_FORMAT_ARG(result.service, "service"),
             FF_FORMAT_ARG(result.type, "type"),
             FF_FORMAT_ARG(result.version, "version"),
@@ -49,30 +47,16 @@ void ffPrintLM(FFLMOptions* options)
     ffStrbufDestroy(&result.version);
 }
 
-bool ffParseLMCommandOptions(FFLMOptions* options, const char* key, const char* value)
-{
-    const char* subKey = ffOptionTestPrefix(key, FF_LM_MODULE_NAME);
-    if (!subKey) return false;
-    if (ffOptionParseModuleArgs(key, subKey, value, &options->moduleArgs))
-        return true;
-
-    return false;
-}
-
 void ffParseLMJsonObject(FFLMOptions* options, yyjson_val* module)
 {
-    yyjson_val *key_, *val;
+    yyjson_val *key, *val;
     size_t idx, max;
-    yyjson_obj_foreach(module, idx, max, key_, val)
+    yyjson_obj_foreach(module, idx, max, key, val)
     {
-        const char* key = yyjson_get_str(key_);
-        if(ffStrEqualsIgnCase(key, "type"))
-            continue;
-
         if (ffJsonConfigParseModuleArgs(key, val, &options->moduleArgs))
             continue;
 
-        ffPrintError(FF_LM_MODULE_NAME, 0, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, "Unknown JSON key %s", key);
+        ffPrintError(FF_LM_MODULE_NAME, 0, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, "Unknown JSON key %s", unsafe_yyjson_get_str(key));
     }
 }
 
@@ -115,28 +99,8 @@ exit:
     ffStrbufDestroy(&result.version);
 }
 
-void ffPrintLMHelpFormat(void)
-{
-    FF_PRINT_MODULE_FORMAT_HELP_CHECKED(FF_LM_MODULE_NAME, "{1} {3} ({2})", FF_LM_NUM_FORMAT_ARGS, ((const char* []) {
-        "LM service - service",
-        "LM type - type",
-        "LM version - version"
-    }));
-}
-
 void ffInitLMOptions(FFLMOptions* options)
 {
-    ffOptionInitModuleBaseInfo(
-        &options->moduleInfo,
-        FF_LM_MODULE_NAME,
-        "Print login manager (desktop manager) name and version",
-        ffParseLMCommandOptions,
-        ffParseLMJsonObject,
-        ffPrintLM,
-        ffGenerateLMJsonResult,
-        ffPrintLMHelpFormat,
-        ffGenerateLMJsonConfig
-    );
     ffOptionInitModuleArg(&options->moduleArgs, "󰧨");
 }
 
@@ -144,3 +108,19 @@ void ffDestroyLMOptions(FFLMOptions* options)
 {
     ffOptionDestroyModuleArg(&options->moduleArgs);
 }
+
+FFModuleBaseInfo ffLMModuleInfo = {
+    .name = FF_LM_MODULE_NAME,
+    .description = "Print login manager (desktop manager) name and version",
+    .initOptions = (void*) ffInitLMOptions,
+    .destroyOptions = (void*) ffDestroyLMOptions,
+    .parseJsonObject = (void*) ffParseLMJsonObject,
+    .printModule = (void*) ffPrintLM,
+    .generateJsonResult = (void*) ffGenerateLMJsonResult,
+    .generateJsonConfig = (void*) ffGenerateLMJsonConfig,
+    .formatArgs = FF_FORMAT_ARG_LIST(((FFModuleFormatArg[]) {
+        {"LM service", "service"},
+        {"LM type", "type"},
+        {"LM version", "version"},
+    }))
+};

@@ -1,122 +1,60 @@
 #include "detection/gpu/gpu.h"
 #include "detection/vulkan/vulkan.h"
-#include "detection/temps/temps_linux.h"
 #include "detection/cpu/cpu.h"
 #include "detection/gpu/gpu_driver_specific.h"
 #include "common/io/io.h"
-#include "common/properties.h"
+#include "common/library.h"
 #include "util/stringUtils.h"
+#include "util/mallocHelper.h"
 
 #include <inttypes.h>
 
-#if __aarch64__ && FF_HAVE_DRM
-    #include <drm.h>
+#ifdef FF_HAVE_DRM_AMDGPU
+    #include <amdgpu.h>
+    #include <amdgpu_drm.h>
     #include <fcntl.h>
-    #include <sys/ioctl.h>
-
-    // https://github.com/AsahiLinux/linux/blob/asahi/include/uapi/drm/asahi_drm.h
-    /* SPDX-License-Identifier: MIT */
-    /* Copyright (C) The Asahi Linux Contributors */
-
-    #define DRM_ASAHI_UNSTABLE_UABI_VERSION		10011
-
-    #define DRM_ASAHI_GET_PARAMS			0x00
-    #define DRM_ASAHI_MAX_CLUSTERS	32
-    struct drm_asahi_params_global
-    {
-        __u32 unstable_uabi_version;
-        __u32 pad0;
-
-        __u64 feat_compat;
-        __u64 feat_incompat;
-
-        __u32 gpu_generation;
-        __u32 gpu_variant;
-        __u32 gpu_revision;
-        __u32 chip_id;
-
-        __u32 num_dies;
-        __u32 num_clusters_total;
-        __u32 num_cores_per_cluster;
-        __u32 num_frags_per_cluster;
-        __u32 num_gps_per_cluster;
-        __u32 num_cores_total_active;
-        __u64 core_masks[DRM_ASAHI_MAX_CLUSTERS];
-
-        __u32 vm_page_size;
-        __u32 pad1;
-        __u64 vm_user_start;
-        __u64 vm_user_end;
-        __u64 vm_usc_start;
-        __u64 vm_usc_end;
-        __u64 vm_kernel_min_size;
-
-        __u32 max_syncs_per_submission;
-        __u32 max_commands_per_submission;
-        __u32 max_commands_in_flight;
-        __u32 max_attachments;
-
-        __u32 timer_frequency_hz;
-        __u32 min_frequency_khz;
-        __u32 max_frequency_khz;
-        __u32 max_power_mw;
-
-        __u32 result_render_size;
-        __u32 result_compute_size;
-
-        __u32 firmware_version[4];
-    };
-
-    struct drm_asahi_get_params
-    {
-        /** @extensions: Pointer to the first extension struct, if any */
-        __u64 extensions;
-
-        /** @param: Parameter group to fetch (MBZ) */
-        __u32 param_group;
-
-        /** @pad: MBZ */
-        __u32 pad;
-
-        /** @value: User pointer to write parameter struct */
-        __u64 pointer;
-
-        /** @value: Size of user buffer, max size supported on return */
-        __u64 size;
-    };
-
-    enum
-    {
-        DRM_IOCTL_ASAHI_GET_PARAMS       = DRM_IOWR(DRM_COMMAND_BASE + DRM_ASAHI_GET_PARAMS, struct drm_asahi_get_params),
-    };
 #endif
 
-#define FF_STR_INDIR(x) #x
-#define FF_STR(x) FF_STR_INDIR(x)
+#ifdef FF_HAVE_DRM
+    #include "intel_drm.h"
+    #include <fcntl.h>
+    #include <sys/ioctl.h>
+#endif
 
-static bool pciDetectDriver(FFGPUResult* gpu, FFstrbuf* pciDir, FFstrbuf* buffer, FF_MAYBE_UNUSED const char* drmKey)
+#if defined(FF_HAVE_DRM) && defined(__aarch64__)
+    // https://github.com/alyssarosenzweig/linux/blob/agx-uapi-v7/include/uapi/drm/asahi_drm.h
+    // Found in kernel-headers-6.14.4-400.asahi.fc42.aarch64
+    #if __has_include(<drm/asahi_drm.h>)
+        #include <drm/asahi_drm.h>
+    #else
+        #include "asahi_drm.h"
+    #endif
+    #define FF_HAVE_DRM_ASAHI 1
+#endif
+
+static bool pciDetectDriver(FFstrbuf* result, FFstrbuf* pciDir, FFstrbuf* buffer, FF_MAYBE_UNUSED const char* drmKey)
 {
     uint32_t pciDirLength = pciDir->length;
     ffStrbufAppendS(pciDir, "/driver");
     char pathBuf[PATH_MAX];
-    ssize_t resultLength = readlink(pciDir->chars, pathBuf, sizeof(pathBuf));
+    ssize_t resultLength = readlink(pciDir->chars, pathBuf, ARRAY_SIZE(pathBuf));
     if(resultLength <= 0) return false;
 
     const char* slash = memrchr(pathBuf, '/', (size_t) resultLength);
     if (slash)
     {
         slash++;
-        ffStrbufSetNS(&gpu->driver, (uint32_t) (resultLength - (slash - pathBuf)), slash);
+        ffStrbufSetNS(result, (uint32_t) (resultLength - (slash - pathBuf)), slash);
     }
 
-    if (ffStrbufEqualS(&gpu->driver, "nvidia"))
+    if (ffStrbufEqualS(result, "nvidia"))
     {
         if (ffReadFileBuffer("/proc/driver/nvidia/version", buffer))
         {
             if (ffStrbufContainS(buffer, " Open "))
-                ffStrbufAppendS(&gpu->driver, " (open source)");
+                ffStrbufAppendS(result, " (open source)");
             else
-                ffStrbufAppendS(&gpu->driver, " (proprietary)");
+                ffStrbufAppendS(result, " (proprietary)");
         }
     }
 
@@ -126,23 +64,65 @@ static bool pciDetectDriver(FFGPUResult* gpu, FFstrbuf* pciDir, FFstrbuf* buffer
         if (ffReadFileBuffer(pciDir->chars, buffer))
         {
             ffStrbufTrimRightSpace(buffer);
-            ffStrbufAppendC(&gpu->driver, ' ');
-            ffStrbufAppend(&gpu->driver, buffer);
+            ffStrbufAppendC(result, ' ');
+            ffStrbufAppend(result, buffer);
         }
-        else if (ffStrbufEqualS(&gpu->driver, "zx"))
+        else if (ffStrbufEqualS(result, "zx"))
         {
             ffStrbufSubstrBefore(pciDir, pciDirLength);
             ffStrbufAppendS(pciDir, "/zx_info/driver_version");
             if (ffReadFileBuffer(pciDir->chars, buffer))
             {
                 ffStrbufTrimRightSpace(buffer);
-                ffStrbufAppendC(&gpu->driver, ' ');
-                ffStrbufAppend(&gpu->driver, buffer);
+                ffStrbufAppendC(result, ' ');
+                ffStrbufAppend(result, buffer);
             }
         }
     }
 
     return true;
+}
+
+FF_MAYBE_UNUSED static const char* drmFindRenderFromCard(const char* drmCardKey, FFstrbuf* result)
+{
+    char path[PATH_MAX];
+    sprintf(path, "/sys/class/drm/%s/device/drm", drmCardKey);
+    FF_AUTO_CLOSE_DIR DIR* dirp = opendir(path);
+    if (!dirp) return "Failed to open `/sys/class/drm/{drmCardKey}/device/drm`";
+
+    struct dirent* entry;
+    while ((entry = readdir(dirp)) != NULL)
+    {
+        if (ffStrStartsWith(entry->d_name, "render"))
+        {
+            ffStrbufSetS(result, "/dev/dri/");
+            ffStrbufAppendS(result, entry->d_name);
+            return NULL;
+        }
+    }
+    return "Failed to find render device";
+}
+
+static const char* drmDetectAmdSpecific(const FFGPUOptions* options, FFGPUResult* gpu, const char* drmKey, FFstrbuf* buffer)
+{
+    #if FF_HAVE_DRM
+    const char* error = drmFindRenderFromCard(drmKey, buffer);
+    if (error) return error;
+    if (ffStrbufEqualS(&gpu->driver, "radeon"))
+        return ffDrmDetectRadeon(options, gpu, buffer->chars);
+    else
+    {
+        #if FF_HAVE_DRM_AMDGPU
+        return ffDrmDetectAmdgpu(options, gpu, buffer->chars);
+        #else
+        FF_UNUSED(options, gpu, drmKey, buffer);
+        return "Fastfetch is not compiled with libdrm_amdgpu support";
+        #endif
+    }
+    #else
+    FF_UNUSED(gpu, drmKey, buffer);
+    return "Fastfetch is not compiled with drm support";
+    #endif
 }
 
 static void pciDetectAmdSpecific(const FFGPUOptions* options, FFGPUResult* gpu, FFstrbuf* pciDir, FFstrbuf* buffer)
@@ -165,95 +145,165 @@ static void pciDetectAmdSpecific(const FFGPUOptions* options, FFGPUResult* gpu, 
     ffStrbufAppendC(pciDir, '/');
 
     const uint32_t hwmonLen = pciDir->length;
-    ffStrbufAppendS(pciDir, "in1_input"); // Northbridge voltage in millivolts (APUs only)
-    if (ffPathExists(pciDir->chars, FF_PATHTYPE_ANY))
-        gpu->type = FF_GPU_TYPE_INTEGRATED;
-    else
-        gpu->type = FF_GPU_TYPE_DISCRETE;
-
     uint64_t value = 0;
     if (options->temp)
     {
-        ffStrbufSubstrBefore(pciDir, hwmonLen);
         ffStrbufAppendS(pciDir, "temp1_input"); // The on die GPU temperature in millidegrees Celsius
         if (ffReadFileBuffer(pciDir->chars, buffer) && (value = ffStrbufToUInt(buffer, 0)))
             gpu->temperature = (double) value / 1000;
     }
 
-    if (options->driverSpecific)
+    if (ffStrbufEqualS(&gpu->driver, "amdgpu")) // Ancient radeon drivers don't have these files
     {
-        ffStrbufSubstrBefore(pciDir, pciDirLen);
-        ffStrbufAppendS(pciDir, "/mem_info_vis_vram_total");
-        if (ffReadFileBuffer(pciDir->chars, buffer) && (value = ffStrbufToUInt(buffer, 0)))
+        ffStrbufSubstrBefore(pciDir, hwmonLen);
+        ffStrbufAppendS(pciDir, "in1_input"); // Northbridge voltage in millivolts (APUs only)
+        if (ffPathExists(pciDir->chars, FF_PATHTYPE_ANY))
+            gpu->type = FF_GPU_TYPE_INTEGRATED;
+        else
+            gpu->type = FF_GPU_TYPE_DISCRETE;
+
+        if (options->driverSpecific)
         {
-            ffStrbufSubstrBefore(pciDir, pciDir->length - (uint32_t) strlen("/mem_info_vis_vram_total"));
-            ffStrbufAppendS(pciDir, "/mem_info_vis_vram_used");
+            ffStrbufSubstrBefore(pciDir, pciDirLen);
+            ffStrbufAppendS(pciDir, "/mem_info_vis_vram_total");
             if (ffReadFileBuffer(pciDir->chars, buffer) && (value = ffStrbufToUInt(buffer, 0)))
             {
                 if (gpu->type == FF_GPU_TYPE_DISCRETE)
-                    gpu->dedicated.used = value;
+                    gpu->dedicated.total = value;
                 else
-                    gpu->shared.used = value;
+                    gpu->shared.total = value;
+
+                ffStrbufSubstrBefore(pciDir, pciDir->length - (uint32_t) strlen("/mem_info_vis_vram_total"));
+                ffStrbufAppendS(pciDir, "/mem_info_vis_vram_used");
+                if (ffReadFileBuffer(pciDir->chars, buffer) && (value = ffStrbufToUInt(buffer, 0)))
+                {
+                    if (gpu->type == FF_GPU_TYPE_DISCRETE)
+                        gpu->dedicated.used = value;
+                    else
+                        gpu->shared.used = value;
+                }
             }
+
+            ffStrbufSubstrBefore(pciDir, pciDirLen);
+            ffStrbufAppendS(pciDir, "/gpu_busy_percent");
+            if (ffReadFileBuffer(pciDir->chars, buffer) && (value = ffStrbufToUInt(buffer, 0)))
+                gpu->coreUsage = (double) value;
         }
     }
 }
 
-static void pciDetectIntelSpecific(FFGPUResult* gpu, FFstrbuf* pciDir, FFstrbuf* buffer, const FFstrbuf* coreName)
+static void pciDetectIntelSpecific(const FFGPUOptions* options, FFGPUResult* gpu, FFstrbuf* pciDir, FFstrbuf* buffer, const char* drmKey)
 {
     // Works for Intel GPUs
     // https://patchwork.kernel.org/project/intel-gfx/patch/1422039866-11572-3-git-send-email-ville.syrjala@linux.intel.com/
 
-    if ((coreName->chars[0] == 'D' || coreName->chars[0] == 'S') &&
-            coreName->chars[1] == 'G' &&
-            ffCharIsDigit(coreName->chars[2]))
-        gpu->type = FF_GPU_TYPE_DISCRETE; // DG1 / DG2 / SG1
-    else
-        gpu->type = FF_GPU_TYPE_INTEGRATED;
+    // 0000:00:02.0 is reserved for Intel integrated graphics
+    gpu->type = gpu->deviceId == 20 ? FF_GPU_TYPE_INTEGRATED : FF_GPU_TYPE_DISCRETE;
 
-    if (ffStrbufEqualS(&gpu->driver, "xe"))
-    {
+    if (!drmKey) return;
+
+    const uint32_t pciDirLen = pciDir->length;
+
+    bool isXE = ffStrbufEqualS(&gpu->driver, "xe");
+    if (isXE)
         ffStrbufAppendS(pciDir, "/tile0/gt0/freq0/max_freq");
-    }
     else
-    {
-        ffStrbufAppendS(pciDir, "/drm/");
-        FF_AUTO_CLOSE_DIR DIR* dirp = opendir(pciDir->chars);
-        if (!dirp) return;
-        struct dirent* entry;
-        while ((entry = readdir(dirp)) != NULL)
-        {
-            if (ffStrStartsWith(entry->d_name, "card")) break;
-        }
-        if (!entry) return;
-        ffStrbufAppendS(pciDir, entry->d_name);
-        ffStrbufAppendS(pciDir, "/gt_max_freq_mhz");
-    }
+        ffStrbufAppendF(pciDir, "/drm/%s/gt_max_freq_mhz", drmKey);
     if (ffReadFileBuffer(pciDir->chars, buffer))
         gpu->frequency = (uint32_t) ffStrbufToUInt(buffer, 0);
+    ffStrbufSubstrBefore(pciDir, pciDirLen);
+
+    if (options->temp)
+    {
+        ffStrbufAppendS(pciDir, "/hwmon/");
+        FF_AUTO_CLOSE_DIR DIR* dirp = opendir(pciDir->chars);
+        if (dirp)
+        {
+            struct dirent* entry;
+            while ((entry = readdir(dirp)) != NULL)
+            {
+                if (entry->d_name[0] == '.') continue;
+
+                ffStrbufSubstrBefore(pciDir, pciDirLen + strlen("/hwmon/"));
+                ffStrbufAppendS(pciDir, entry->d_name);
+                // https://github.com/Syllo/nvtop/blob/73291884d926445e499d6b9b71cb7a9bdbc7c393/src/extract_gpuinfo_intel.c#L279-L281
+                ffStrbufAppendS(pciDir, isXE ? "/temp2_input" : "/temp1_input");
+
+                if (ffReadFileBuffer(pciDir->chars, buffer))
+                {
+                    uint64_t value = ffStrbufToUInt(buffer, 0);
+                    if (value > 0)
+                    {
+                        gpu->temperature = (double) value / 1000;
+                        break;
+                    }
+                }
+            }
+        }
+        ffStrbufSubstrBefore(pciDir, pciDirLen);
+    }
 }
 
-static bool loadPciIds(FFstrbuf* pciids)
+static const char* drmDetectIntelSpecific(FFGPUResult* gpu, const char* drmKey, FFstrbuf* buffer)
 {
-    #ifdef FF_CUSTOM_PCI_IDS_PATH
+    #if FF_HAVE_DRM
+    ffStrbufSetS(buffer, "/dev/dri/");
+    ffStrbufAppendS(buffer, drmKey);
+    FF_AUTO_CLOSE_FD int fd = open(buffer->chars, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return "Failed to open drm device";
 
-    ffReadFileBuffer(FF_STR(FF_CUSTOM_PCI_IDS_PATH), pciids);
-    if (pciids->length > 0) return true;
-
+    if (ffStrbufEqualS(&gpu->driver, "xe"))
+        return ffDrmDetectXe(gpu, fd);
+    else if (ffStrbufEqualS(&gpu->driver, "i915"))
+        return ffDrmDetectI915(gpu, fd);
+    return "Unknown Intel GPU driver";
     #else
-
-    ffReadFileBuffer(FASTFETCH_TARGET_DIR_USR "/share/hwdata/pci.ids", pciids);
-    if (pciids->length > 0) return true;
-
-    ffReadFileBuffer(FASTFETCH_TARGET_DIR_USR "/share/misc/pci.ids", pciids); // debian?
-    if (pciids->length > 0) return true;
-
-    ffReadFileBuffer(FASTFETCH_TARGET_DIR_USR "/local/share/hwdata/pci.ids", pciids);
-    if (pciids->length > 0) return true;
-
+    FF_UNUSED(gpu, drmKey, buffer);
+    return "Fastfetch is not compiled with drm support";
     #endif
+}
 
-    return false;
+static const char* pciDetectNouveauSpecific(const FFGPUOptions* options, FFGPUResult* gpu, FFstrbuf* pciDir, FFstrbuf* buffer)
+{
+    if (options->temp)
+    {
+        const uint32_t pciDirLen = pciDir->length;
+        ffStrbufAppendS(pciDir, "/hwmon/");
+        FF_AUTO_CLOSE_DIR DIR* dirp = opendir(pciDir->chars);
+        if (dirp)
+        {
+            struct dirent* entry;
+            while ((entry = readdir(dirp)))
+            {
+                if (entry->d_name[0] == '.') continue;
+                ffStrbufAppendS(pciDir, entry->d_name);
+                ffStrbufAppendS(pciDir, "/temp1_input");
+                if (ffReadFileBuffer(pciDir->chars, buffer))
+                {
+                    uint64_t value = ffStrbufToUInt(buffer, 0);
+                    if (value > 0) gpu->temperature = (double) value / 1000.0;
+                }
+                break;
+            }
+        }
+        ffStrbufSubstrBefore(pciDir, pciDirLen);
+    }
+    return NULL;
+}
+
+static const char* drmDetectNouveauSpecific(FFGPUResult* gpu, const char* drmKey, FFstrbuf* buffer)
+{
+    #if FF_HAVE_DRM
+    ffStrbufSetS(buffer, "/dev/dri/");
+    ffStrbufAppendS(buffer, drmKey);
+    FF_AUTO_CLOSE_FD int fd = open(buffer->chars, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return "Failed to open drm device";
+
+    return ffDrmDetectNouveau(gpu, fd);
+    #else
+    FF_UNUSED(gpu, drmKey, buffer);
+    return "Fastfetch is not compiled with drm support";
+    #endif
 }
 
 static const char* detectPci(const FFGPUOptions* options, FFlist* gpus, FFstrbuf* buffer, FFstrbuf* deviceDir, const char* drmKey)
@@ -262,7 +312,7 @@ static const char* detectPci(const FFGPUOptions* options, FFlist* gpus, FFstrbuf
     uint32_t vendorId, deviceId, subVendorId, subDeviceId;
     uint8_t classId, subclassId;
     if (sscanf(buffer->chars + strlen("pci:"), "v%8" SCNx32 "d%8" SCNx32 "sv%8" SCNx32 "sd%8" SCNx32 "bc%2" SCNx8 "sc%2" SCNx8, &vendorId, &deviceId, &subVendorId, &subDeviceId, &classId, &subclassId) != 6)
-        return "Invalid modalias string";
+        return "Failed to parse pci modalias";
 
     if (classId != 0x03 /*PCI_BASE_CLASS_DISPLAY*/)
         return "Not a GPU device";
@@ -271,7 +321,7 @@ static const char* detectPci(const FFGPUOptions* options, FFlist* gpus, FFstrbuf
     const char* pPciPath = NULL;
     if (drmKey)
     {
-        ssize_t pathLength = readlink(deviceDir->chars, pciPath, sizeof(pciPath) - 1);
+        ssize_t pathLength = readlink(deviceDir->chars, pciPath, ARRAY_SIZE(pciPath) - 1);
         if (pathLength <= 0)
             return "Unable to get PCI device path";
         pciPath[pathLength] = '\0';
@@ -283,7 +333,9 @@ static const char* detectPci(const FFGPUOptions* options, FFlist* gpus, FFstrbuf
     }
     else
     {
-        pPciPath = memrchr(deviceDir->chars, '/', deviceDir->length) + 1;
+        pPciPath = memrchr(deviceDir->chars, '/', deviceDir->length);
+        assert(pPciPath);
+        pPciPath++;
     }
 
     uint32_t pciDomain, pciBus, pciDevice, pciFunc;
@@ -291,105 +343,107 @@ static const char* detectPci(const FFGPUOptions* options, FFlist* gpus, FFstrbuf
         return "Invalid PCI device path";
 
     FFGPUResult* gpu = (FFGPUResult*)ffListAdd(gpus);
-    ffStrbufInitStatic(&gpu->vendor, ffGetGPUVendorString((uint16_t) vendorId));
+    ffStrbufInitStatic(&gpu->vendor, ffGPUGetVendorString((uint16_t) vendorId));
     ffStrbufInit(&gpu->name);
     ffStrbufInit(&gpu->driver);
     ffStrbufInit(&gpu->platformApi);
+    ffStrbufInit(&gpu->memoryType);
+    gpu->index = FF_GPU_INDEX_UNSET;
     gpu->temperature = FF_GPU_TEMP_UNSET;
     gpu->coreUsage = FF_GPU_CORE_USAGE_UNSET;
     gpu->coreCount = FF_GPU_CORE_COUNT_UNSET;
     gpu->type = FF_GPU_TYPE_UNKNOWN;
     gpu->dedicated.total = gpu->dedicated.used = gpu->shared.total = gpu->shared.used = FF_GPU_VMEM_SIZE_UNSET;
-    gpu->deviceId = ((uint64_t) pciDomain << 6) | ((uint64_t) pciBus << 4) | (deviceId << 2) | pciFunc;
+    gpu->deviceId = (pciDomain * 100000ull) + (pciBus * 1000ull) + (pciDevice * 10ull) + pciFunc;
     gpu->frequency = FF_GPU_FREQUENCY_UNSET;
 
-    if (drmKey) ffStrbufSetF(&gpu->platformApi, "DRM (%s)", drmKey);
-
-    if (gpu->vendor.chars == FF_GPU_VENDOR_NAME_AMD)
+    char drmKeyBuffer[8];
+    if (!drmKey)
     {
-        ffStrbufAppendS(deviceDir, "/revision");
-        if (ffReadFileBuffer(deviceDir->chars, buffer))
+        ffStrbufAppendS(deviceDir, "/drm");
+        FF_AUTO_CLOSE_DIR DIR* dirp = opendir(deviceDir->chars);
+        if (dirp)
         {
-            char* pend;
-            uint64_t revision = strtoul(buffer->chars, &pend, 16);
-            if (pend != buffer->chars)
+            struct dirent* entry;
+            while ((entry = readdir(dirp)) != NULL)
             {
-                char query[32];
-                snprintf(query, sizeof(query), "%X,\t%X,", (unsigned) deviceId, (unsigned) revision);
-                #ifdef FF_CUSTOM_AMDGPU_IDS_PATH
-                ffParsePropFile(FF_STR(FF_CUSTOM_AMDGPU_IDS_PATH), query, &gpu->name);
-                #else
-                ffParsePropFileData("libdrm/amdgpu.ids", query, &gpu->name);
-                #endif
+                if (ffStrStartsWith(entry->d_name, "card"))
+                {
+                    ffStrCopy(drmKeyBuffer, entry->d_name, ARRAY_SIZE(drmKeyBuffer));
+                    drmKey = drmKeyBuffer;
+                    break;
+                }
             }
         }
         ffStrbufSubstrBefore(deviceDir, drmDirPathLength);
     }
 
-    FF_STRBUF_AUTO_DESTROY coreName = ffStrbufCreate();
-    if (gpu->name.length == 0)
-    {
-        static FFstrbuf pciids;
-        if (pciids.chars == NULL)
-        {
-            ffStrbufInit(&pciids);
-            loadPciIds(&pciids);
-        }
-        ffGPUParsePciIds(&pciids, subclassId, (uint16_t) vendorId, (uint16_t) deviceId, gpu, &coreName);
-    }
+    if (drmKey) ffStrbufSetF(&gpu->platformApi, "DRM (%s)", drmKey);
 
-    pciDetectDriver(gpu, deviceDir, buffer, drmKey);
+    pciDetectDriver(&gpu->driver, deviceDir, buffer, drmKey);
     ffStrbufSubstrBefore(deviceDir, drmDirPathLength);
 
     if (gpu->vendor.chars == FF_GPU_VENDOR_NAME_AMD)
     {
-        pciDetectAmdSpecific(options, gpu, deviceDir, buffer);
-        ffStrbufSubstrBefore(deviceDir, drmDirPathLength);
+        bool ok = false;
+        if (drmKey && options->driverSpecific)
+            ok = drmDetectAmdSpecific(options, gpu, drmKey, buffer) == NULL;
+
+        if (!ok)
+        {
+            pciDetectAmdSpecific(options, gpu, deviceDir, buffer);
+            ffStrbufSubstrBefore(deviceDir, drmDirPathLength);
+
+            ffStrbufAppendS(deviceDir, "/revision");
+            if (ffReadFileBuffer(deviceDir->chars, buffer))
+            {
+                char* pend;
+                uint64_t revision = strtoul(buffer->chars, &pend, 16);
+                if (pend != buffer->chars)
+                    ffGPUQueryAmdGpuName((uint16_t) deviceId, (uint8_t) revision, gpu);
+            }
+            ffStrbufSubstrBefore(deviceDir, drmDirPathLength);
+        }
     }
     else if (gpu->vendor.chars == FF_GPU_VENDOR_NAME_INTEL)
     {
-        pciDetectIntelSpecific(gpu, deviceDir, buffer, &coreName);
+        pciDetectIntelSpecific(options, gpu, deviceDir, buffer, drmKey);
         ffStrbufSubstrBefore(deviceDir, drmDirPathLength);
+        if (options->driverSpecific && drmKey)
+            drmDetectIntelSpecific(gpu, drmKey, buffer);
+    }
+    else if (gpu->vendor.chars == FF_GPU_VENDOR_NAME_NVIDIA && ffStrbufEqualS(&gpu->driver, "nouveau"))
+    {
+        pciDetectNouveauSpecific(options, gpu, deviceDir, buffer);
+        if (options->driverSpecific && drmKey)
+            drmDetectNouveauSpecific(gpu, drmKey, buffer);
     }
     else
     {
-        __typeof__(&ffDetectNvidiaGpuInfo) detectFn;
-        const char* soName;
-        if (getDriverSpecificDetectionFn(gpu->vendor.chars, &detectFn, &soName) && (options->temp || options->driverSpecific))
-        {
-            detectFn(&(FFGpuDriverCondition) {
-                .type = FF_GPU_DRIVER_CONDITION_TYPE_BUS_ID,
-                .pciBusId = {
-                    .domain = pciDomain,
-                    .bus = pciBus,
-                    .device = pciDevice,
-                    .func = pciFunc,
-                },
-            }, (FFGpuDriverResult) {
-                .temp = options->temp ? &gpu->temperature : NULL,
-                .memory = options->driverSpecific ? &gpu->dedicated : NULL,
-                .coreCount = options->driverSpecific ? (uint32_t*) &gpu->coreCount : NULL,
-                .coreUsage = options->driverSpecific ? &gpu->coreUsage : NULL,
-                .type = &gpu->type,
-                .frequency = options->driverSpecific ? &gpu->frequency : NULL,
-                .name = options->driverSpecific ? &gpu->name : NULL,
-            }, soName);
-        }
+        ffGPUDetectDriverSpecific(options, gpu, (FFGpuDriverPciBusId) {
+            .domain = pciDomain,
+            .bus = pciBus,
+            .device = pciDevice,
+            .func = pciFunc,
+        });
+    }
 
-        if (gpu->type == FF_GPU_TYPE_UNKNOWN)
+    if (gpu->name.length == 0)
+        ffGPUFillVendorAndName(subclassId, (uint16_t) vendorId, (uint16_t) deviceId, gpu);
+
+    if (gpu->type == FF_GPU_TYPE_UNKNOWN)
+    {
+        if (gpu->vendor.chars == FF_GPU_VENDOR_NAME_NVIDIA)
         {
-            if (gpu->vendor.chars == FF_GPU_VENDOR_NAME_NVIDIA)
-            {
-                if (ffStrbufStartsWithIgnCaseS(&gpu->name, "GeForce") ||
-                    ffStrbufStartsWithIgnCaseS(&gpu->name, "Quadro") ||
-                    ffStrbufStartsWithIgnCaseS(&gpu->name, "Tesla"))
-                    gpu->type = FF_GPU_TYPE_DISCRETE;
-            }
-            else if (gpu->vendor.chars == FF_GPU_VENDOR_NAME_MTHREADS)
-            {
-                if (ffStrbufStartsWithIgnCaseS(&gpu->name, "MTT "))
-                    gpu->type = FF_GPU_TYPE_DISCRETE;
-            }
+            if (ffStrbufStartsWithIgnCaseS(&gpu->name, "GeForce") ||
+                ffStrbufStartsWithIgnCaseS(&gpu->name, "Quadro") ||
+                ffStrbufStartsWithIgnCaseS(&gpu->name, "Tesla"))
+                gpu->type = FF_GPU_TYPE_DISCRETE;
+        }
+        else if (gpu->vendor.chars == FF_GPU_VENDOR_NAME_MTHREADS)
+        {
+            if (ffStrbufStartsWithIgnCaseS(&gpu->name, "MTT "))
+                gpu->type = FF_GPU_TYPE_DISCRETE;
         }
     }
 
@@ -398,19 +452,44 @@ static const char* detectPci(const FFGPUOptions* options, FFlist* gpus, FFstrbuf
 
 #if __aarch64__
 
-FF_MAYBE_UNUSED static const char* detectAsahi(FFlist* gpus, FFstrbuf* buffer, FFstrbuf* drmDir, const char* drmKey)
+FF_MAYBE_UNUSED static const char* drmDetectAsahiSpecific(FFGPUResult* gpu, const char* name, FF_MAYBE_UNUSED FFstrbuf* buffer, FF_MAYBE_UNUSED const char* drmKey)
 {
-    uint32_t index = ffStrbufFirstIndexS(buffer, "apple,agx-t");
-    if (index == buffer->length) return "display-subsystem?";
-    index += (uint32_t) strlen("apple,agx-t");
+    if (sscanf(name, "agx-t%lu", &gpu->deviceId) == 1)
+        ffStrbufSetStatic(&gpu->name, ffCPUAppleCodeToName((uint32_t) gpu->deviceId));
+    ffStrbufSetStatic(&gpu->vendor, FF_GPU_VENDOR_NAME_APPLE);
+
+    #if FF_HAVE_DRM_ASAHI
+    ffStrbufSetS(buffer, "/dev/dri/");
+    ffStrbufAppendS(buffer, drmKey);
+    FF_AUTO_CLOSE_FD int fd = open(buffer->chars, O_RDONLY | O_CLOEXEC);
+    if (fd >= 0)
+        return ffDrmDetectAsahi(gpu, fd);
+    #endif
+
+    return NULL;
+}
+#endif
+
+static const char* detectOf(FFlist* gpus, FFstrbuf* buffer, FFstrbuf* drmDir, const char* drmKey)
+{
+    char compatible[256]; // vendor,model-name
+    if (sscanf(buffer->chars + strlen("of:"), "NgpuT%*[^C]C%255[^C]", compatible) != 1)
+        return "Failed to parse of modalias or not a GPU device";
+
+    char* name = strchr(compatible, ',');
+    if (name)
+    {
+        *name = '\0';
+        ++name;
+    }
 
     FFGPUResult* gpu = (FFGPUResult*)ffListAdd(gpus);
-    gpu->deviceId = strtoul(buffer->chars + index, NULL, 10);
-    ffStrbufInitStatic(&gpu->name, ffCPUAppleCodeToName((uint32_t) gpu->deviceId));
-    if (!gpu->name.length)
-        ffStrbufAppendF(&gpu->name, "Apple Silicon T%u", (uint32_t) gpu->deviceId);
-    ffStrbufInitStatic(&gpu->vendor, FF_GPU_VENDOR_NAME_APPLE);
+    gpu->index = FF_GPU_INDEX_UNSET;
+    gpu->deviceId = 0;
+    ffStrbufInit(&gpu->name);
+    ffStrbufInit(&gpu->vendor);
     ffStrbufInit(&gpu->driver);
+    ffStrbufInit(&gpu->memoryType);
     ffStrbufInitF(&gpu->platformApi, "DRM (%s)", drmKey);
     gpu->temperature = FF_GPU_TEMP_UNSET;
     gpu->coreCount = FF_GPU_CORE_COUNT_UNSET;
@@ -419,36 +498,31 @@ FF_MAYBE_UNUSED static const char* detectAsahi(FFlist* gpus, FFstrbuf* buffer, F
     gpu->dedicated.total = gpu->dedicated.used = gpu->shared.total = gpu->shared.used = FF_GPU_VMEM_SIZE_UNSET;
     gpu->frequency = FF_GPU_FREQUENCY_UNSET;
 
-    pciDetectDriver(gpu, drmDir, buffer, drmKey);
+    pciDetectDriver(&gpu->driver, drmDir, buffer, drmKey);
 
-    #if FF_HAVE_DRM
-    ffStrbufSetS(buffer, "/dev/dri/");
-    ffStrbufAppendS(buffer, drmKey);
-    FF_AUTO_CLOSE_FD int fd = open(buffer->chars, O_RDONLY);
-    if (fd >= 0)
+    #ifdef __aarch64__
+    if (ffStrbufEqualS(&gpu->driver, "asahi"))
+        drmDetectAsahiSpecific(gpu, name, buffer, drmKey);
+    #endif
+
+    if (!gpu->name.length)
     {
-        struct drm_asahi_params_global paramsGlobal = {};
-        if (ioctl(fd, DRM_IOCTL_ASAHI_GET_PARAMS, &(struct drm_asahi_get_params){
-            .param_group = DRM_ASAHI_GET_PARAMS,
-            .pointer = (uint64_t) &paramsGlobal,
-            .size = sizeof(paramsGlobal),
-        }) >= 0)
+        ffStrbufSetS(&gpu->name, name ? name : compatible);
+        ffStrbufTrimRightSpace(&gpu->name);
+    }
+    if (!gpu->vendor.length && name)
+    {
+        if (ffStrEquals(compatible, "brcm"))
+            ffStrbufSetStatic(&gpu->vendor, "Broadcom"); // Raspberry Pi
+        else
         {
-            // FIXME: They will introduce ABI breaking changes. Always check the latest version
-            // https://www.reddit.com/r/AsahiLinux/comments/1ei2qiv/comment/lgm0v5s/
-            if (paramsGlobal.unstable_uabi_version == DRM_ASAHI_UNSTABLE_UABI_VERSION)
-            {
-                gpu->coreCount = (int) paramsGlobal.num_cores_total_active;
-                gpu->frequency = paramsGlobal.max_frequency_khz / 1000;
-                gpu->deviceId = paramsGlobal.chip_id;
-            }
+            ffStrbufSetS(&gpu->vendor, compatible);
+            gpu->vendor.chars[0] = (char) toupper(compatible[0]);
         }
     }
-    #endif
 
     return NULL;
 }
-#endif
 
 static const char* drmDetectGPUs(const FFGPUOptions* options, FFlist* gpus)
 {
@@ -478,10 +552,8 @@ static const char* drmDetectGPUs(const FFGPUOptions* options, FFlist* gpus)
 
         if (ffStrbufStartsWithS(&buffer, "pci:"))
             detectPci(options, gpus, &buffer, &drmDir, entry->d_name);
-        #ifdef __aarch64__
         else if (ffStrbufStartsWithS(&buffer, "of:"))
-            detectAsahi(gpus, &buffer, &drmDir, entry->d_name);
-        #endif
+            detectOf(gpus, &buffer, &drmDir, entry->d_name);
 
         ffStrbufSubstrBefore(&drmDir, drmDirLength);
     }

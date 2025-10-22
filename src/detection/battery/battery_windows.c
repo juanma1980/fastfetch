@@ -8,40 +8,31 @@
 
 #undef WIN32_LEAN_AND_MEAN
 #include <windows.h>
-#include <setupapi.h>
 #include <batclass.h>
 #include <devguid.h>
+#include <cfgmgr32.h>
 #include <winternl.h>
 
-static inline void wrapSetupDiDestroyDeviceInfoList(HDEVINFO* hdev)
+static const char* detectWithCmApi(FFBatteryOptions* options, FFlist* results)
 {
-    if(*hdev)
-        SetupDiDestroyDeviceInfoList(*hdev);
-}
+    //https://learn.microsoft.com/en-us/windows-hardware/drivers/install/using-device-interfaces
+    ULONG cchDeviceInterfaces = 0;
+    CONFIGRET cr = CM_Get_Device_Interface_List_SizeW(&cchDeviceInterfaces, (LPGUID)&GUID_DEVCLASS_BATTERY, NULL, CM_GET_DEVICE_INTERFACE_LIST_PRESENT);
+    if (cr != CR_SUCCESS)
+        return "CM_Get_Device_Interface_List_SizeW() failed";
 
-static const char* detectWithSetupApi(FFBatteryOptions* options, FFlist* results)
-{
-    //https://learn.microsoft.com/en-us/windows/win32/power/enumerating-battery-devices
-    HDEVINFO hdev __attribute__((__cleanup__(wrapSetupDiDestroyDeviceInfoList))) =
-        SetupDiGetClassDevsW(&GUID_DEVCLASS_BATTERY, 0, 0, DIGCF_PRESENT | DIGCF_DEVICEINTERFACE);
-    if(hdev == INVALID_HANDLE_VALUE)
-        return "SetupDiGetClassDevsW(&GUID_DEVCLASS_BATTERY) failed";
+    if (cchDeviceInterfaces <= 1)
+        return NULL; // Not found
 
-    SP_DEVICE_INTERFACE_DATA did = { .cbSize = sizeof(did) };
-    for(DWORD idev = 0; SetupDiEnumDeviceInterfaces(hdev, NULL, &GUID_DEVCLASS_BATTERY, idev, &did); idev++)
+    wchar_t* FF_AUTO_FREE mszDeviceInterfaces = (wchar_t*)malloc(cchDeviceInterfaces * sizeof(wchar_t));
+    cr = CM_Get_Device_Interface_ListW((LPGUID)&GUID_DEVCLASS_BATTERY, NULL, mszDeviceInterfaces, cchDeviceInterfaces, CM_GET_DEVICE_INTERFACE_LIST_PRESENT);
+    if (cr != CR_SUCCESS)
+        return "CM_Get_Device_Interface_ListW() failed";
+
+    for (const wchar_t* pDeviceInterface = mszDeviceInterfaces; *pDeviceInterface; pDeviceInterface += wcslen(pDeviceInterface) + 1)
     {
-        DWORD cbRequired = 0;
-        SetupDiGetDeviceInterfaceDetailW(hdev, &did, NULL, 0, &cbRequired, NULL); //Fail with not enough buffer
-        SP_DEVICE_INTERFACE_DETAIL_DATA_W* FF_AUTO_FREE pdidd = (SP_DEVICE_INTERFACE_DETAIL_DATA_W*)malloc(cbRequired);
-        if(!pdidd)
-            break; //Out of memory
-
-        pdidd->cbSize = sizeof(*pdidd);
-        if(!SetupDiGetDeviceInterfaceDetailW(hdev, &did, pdidd, cbRequired, &cbRequired, NULL))
-            continue;
-
         HANDLE FF_AUTO_CLOSE_FD hBattery =
-            CreateFileW(pdidd->DevicePath, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+            CreateFileW(pDeviceInterface, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
 
         if(hBattery == INVALID_HANDLE_VALUE)
             continue;
@@ -99,7 +90,7 @@ static const char* detectWithSetupApi(FFBatteryOptions* options, FFlist* results
             bqi.InformationLevel = BatteryManufactureDate;
             BATTERY_MANUFACTURE_DATE date;
             if(DeviceIoControl(hBattery, IOCTL_BATTERY_QUERY_INFORMATION, &bqi, sizeof(bqi), &date, sizeof(date), &dwOut, NULL))
-                ffStrbufSetF(&battery->manufactureDate, "%.4d-%.2d-%.2d", date.Year + 1900, date.Month, date.Day);
+                ffStrbufSetF(&battery->manufactureDate, "%.4d-%.2d-%.2d", date.Year < 1000 ? date.Year + 1900 : date.Year, date.Month, date.Day);
         }
 
         {
@@ -122,9 +113,16 @@ static const char* detectWithSetupApi(FFBatteryOptions* options, FFlist* results
         }
 
         {
+            bqi.InformationLevel = BatteryEstimatedTime;
+            ULONG time;
+            if(DeviceIoControl(hBattery, IOCTL_BATTERY_QUERY_INFORMATION, &bqi, sizeof(bqi), &time, sizeof(time), &dwOut, NULL))
+                battery->timeRemaining = time == BATTERY_UNKNOWN_TIME ? -1 : (int32_t) time;
+        }
+
+        {
             BATTERY_STATUS bs;
             BATTERY_WAIT_STATUS bws = { .BatteryTag = bqi.BatteryTag };
-            if(DeviceIoControl(hBattery, IOCTL_BATTERY_QUERY_STATUS, &bws, sizeof(bws), &bs, sizeof(bs), &dwOut, NULL) && bs.Capacity != BATTERY_UNKNOWN_CAPACITY)
+            if(DeviceIoControl(hBattery, IOCTL_BATTERY_QUERY_STATUS, &bws, sizeof(bws), &bs, sizeof(bs), &dwOut, NULL) && bs.Capacity != BATTERY_UNKNOWN_CAPACITY && bi.FullChargedCapacity != 0)
                 battery->capacity = bs.Capacity * 100.0 / bi.FullChargedCapacity;
             else
                 battery->capacity = 0;
@@ -241,6 +239,7 @@ static const char* detectWithNtApi(FF_MAYBE_UNUSED FFBatteryOptions* options, FF
         ffStrbufInit(&battery->serial);
         battery->temperature = FF_BATTERY_TEMP_UNSET;
         battery->cycleCount = 0;
+        battery->timeRemaining = info.EstimatedTime == BATTERY_UNKNOWN_TIME ? -1 : (int32_t) info.EstimatedTime;
 
         battery->capacity = info.RemainingCapacity * 100.0 / info.MaxCapacity;
         if(info.AcOnLine)
@@ -252,6 +251,7 @@ static const char* detectWithNtApi(FF_MAYBE_UNUSED FFBatteryOptions* options, FF
         else if(info.Discharging)
             ffStrbufAppendS(&battery->status, "Discharging");
 
+
         detectBySmbios(battery);
 
         return NULL;
@@ -262,6 +262,6 @@ static const char* detectWithNtApi(FF_MAYBE_UNUSED FFBatteryOptions* options, FF
 const char* ffDetectBattery(FFBatteryOptions* options, FFlist* results)
 {
     return options->useSetupApi
-        ? detectWithSetupApi(options, results)
+        ? detectWithCmApi(options, results)
         : detectWithNtApi(options, results);
 }

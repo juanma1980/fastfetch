@@ -4,8 +4,6 @@
 #include "modules/host/host.h"
 #include "util/stringUtils.h"
 
-#define FF_HOST_NUM_FORMAT_ARGS 7
-
 void ffPrintHost(FFHostOptions* options)
 {
     FFHostResult host;
@@ -48,7 +46,7 @@ void ffPrintHost(FFHostOptions* options)
     }
     else
     {
-        FF_PRINT_FORMAT_CHECKED(FF_HOST_MODULE_NAME, 0, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, FF_HOST_NUM_FORMAT_ARGS, ((FFformatarg[]) {
+        FF_PRINT_FORMAT_CHECKED(FF_HOST_MODULE_NAME, 0, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, ((FFformatarg[]) {
             FF_FORMAT_ARG(host.family, "family"),
             FF_FORMAT_ARG(host.name, "name"),
             FF_FORMAT_ARG(host.version, "version"),
@@ -69,30 +67,16 @@ exit:
     ffStrbufDestroy(&host.vendor);
 }
 
-bool ffParseHostCommandOptions(FFHostOptions* options, const char* key, const char* value)
-{
-    const char* subKey = ffOptionTestPrefix(key, FF_HOST_MODULE_NAME);
-    if (!subKey) return false;
-    if (ffOptionParseModuleArgs(key, subKey, value, &options->moduleArgs))
-        return true;
-
-    return false;
-}
-
 void ffParseHostJsonObject(FFHostOptions* options, yyjson_val* module)
 {
-    yyjson_val *key_, *val;
+    yyjson_val *key, *val;
     size_t idx, max;
-    yyjson_obj_foreach(module, idx, max, key_, val)
+    yyjson_obj_foreach(module, idx, max, key, val)
     {
-        const char* key = yyjson_get_str(key_);
-        if(ffStrEqualsIgnCase(key, "type"))
-            continue;
-
         if (ffJsonConfigParseModuleArgs(key, val, &options->moduleArgs))
             continue;
 
-        ffPrintError(FF_HOST_MODULE_NAME, 0, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, "Unknown JSON key %s", key);
+        ffPrintError(FF_HOST_MODULE_NAME, 0, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, "Unknown JSON key %s", unsafe_yyjson_get_str(key));
     }
 }
 
@@ -147,32 +131,8 @@ exit:
     ffStrbufDestroy(&host.vendor);
 }
 
-void ffPrintHostHelpFormat(void)
-{
-    FF_PRINT_MODULE_FORMAT_HELP_CHECKED(FF_HOST_MODULE_NAME, "{2} {3}", FF_HOST_NUM_FORMAT_ARGS, ((const char* []) {
-        "product family - family",
-        "product name - name",
-        "product version - version",
-        "product sku - sku",
-        "product vendor - vendor",
-        "product serial number - serial",
-        "product uuid - uuid",
-    }));
-}
-
 void ffInitHostOptions(FFHostOptions* options)
 {
-    ffOptionInitModuleBaseInfo(
-        &options->moduleInfo,
-        FF_HOST_MODULE_NAME,
-        "Print product name of your computer",
-        ffParseHostCommandOptions,
-        ffParseHostJsonObject,
-        ffPrintHost,
-        ffGenerateHostJsonResult,
-        ffPrintHostHelpFormat,
-        ffGenerateHostJsonConfig
-    );
     ffOptionInitModuleArg(&options->moduleArgs, "󰌢");
 }
 
@@ -180,3 +140,23 @@ void ffDestroyHostOptions(FFHostOptions* options)
 {
     ffOptionDestroyModuleArg(&options->moduleArgs);
 }
+
+FFModuleBaseInfo ffHostModuleInfo = {
+    .name = FF_HOST_MODULE_NAME,
+    .description = "Print product name of your computer",
+    .initOptions = (void*) ffInitHostOptions,
+    .destroyOptions = (void*) ffDestroyHostOptions,
+    .parseJsonObject = (void*) ffParseHostJsonObject,
+    .printModule = (void*) ffPrintHost,
+    .generateJsonResult = (void*) ffGenerateHostJsonResult,
+    .generateJsonConfig = (void*) ffGenerateHostJsonConfig,
+    .formatArgs = FF_FORMAT_ARG_LIST(((FFModuleFormatArg[]) {
+        {"Product family", "family"},
+        {"Product name", "name"},
+        {"Product version", "version"},
+        {"Product sku", "sku"},
+        {"Product vendor", "vendor"},
+        {"Product serial number", "serial"},
+        {"Product uuid", "uuid"},
+    }))
+};

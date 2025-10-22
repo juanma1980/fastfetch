@@ -1,8 +1,5 @@
 #pragma once
 
-#ifndef FASTFETCH_INCLUDED_FFSTRBUF
-#define FASTFETCH_INCLUDED_FFSTRBUF
-
 #include "FFcheckmacros.h"
 
 #include <stdint.h>
@@ -12,10 +9,11 @@
 #include <string.h>
 #include <stdlib.h>
 #include <assert.h>
+#include "3rdparty/yyjson/yyjson.h"
 
 #ifdef _WIN32
     // #include <shlwapi.h>
-    __stdcall const char* StrStrIA(const char* lpFirst, const char* lpSrch);
+    __stdcall char* StrStrIA(const char* lpFirst, const char* lpSrch);
     #define strcasestr StrStrIA
 #endif
 
@@ -47,13 +45,15 @@ void ffStrbufAppendVF(FFstrbuf* strbuf, const char* format, va_list arguments);
 const char* ffStrbufAppendSUntilC(FFstrbuf* strbuf, const char* value, char until);
 
 void ffStrbufPrependNS(FFstrbuf* strbuf, uint32_t length, const char* value);
+void ffStrbufPrependC(FFstrbuf* strbuf, char c);
 
-void ffStrbufSetNS(FFstrbuf* strbuf, uint32_t length, const char* value);
-void ffStrbufSet(FFstrbuf* strbuf, const FFstrbuf* value);
+void ffStrbufInsertNC(FFstrbuf* strbuf, uint32_t index, uint32_t num, char c);
+
 FF_C_PRINTF(2, 3) void ffStrbufSetF(FFstrbuf* strbuf, const char* format, ...);
 
 void ffStrbufTrimLeft(FFstrbuf* strbuf, char c);
 void ffStrbufTrimRight(FFstrbuf* strbuf, char c);
+void ffStrbufTrimLeftSpace(FFstrbuf* strbuf);
 void ffStrbufTrimRightSpace(FFstrbuf* strbuf);
 
 bool ffStrbufRemoveSubstr(FFstrbuf* strbuf, uint32_t startIndex, uint32_t endIndex);
@@ -73,6 +73,7 @@ bool ffStrbufSubstrAfter(FFstrbuf* strbuf, uint32_t index); // Not including the
 bool ffStrbufSubstrAfterFirstC(FFstrbuf* strbuf, char c);
 bool ffStrbufSubstrAfterFirstS(FFstrbuf* strbuf, const char* str);
 bool ffStrbufSubstrAfterLastC(FFstrbuf* strbuf, char c);
+bool ffStrbufSubstr(FFstrbuf* strbuf, uint32_t start, uint32_t end);
 
 FF_C_NODISCARD uint32_t ffStrbufCountC(const FFstrbuf* strbuf, char c);
 
@@ -90,6 +91,13 @@ FF_C_NODISCARD uint64_t ffStrbufToUInt(const FFstrbuf* strbuf, uint64_t defaultV
 void ffStrbufUpperCase(FFstrbuf* strbuf);
 void ffStrbufLowerCase(FFstrbuf* strbuf);
 
+bool ffStrbufGetline(char** lineptr, size_t* n, FFstrbuf* buffer);
+void ffStrbufGetlineRestore(char** lineptr, size_t* n, FFstrbuf* buffer);
+bool ffStrbufRemoveDupWhitespaces(FFstrbuf* strbuf);
+bool ffStrbufMatchSeparatedNS(const FFstrbuf* strbuf, uint32_t compLength, const char* comp, char separator);
+
+int ffStrbufAppendUtf32CodePoint(FFstrbuf* strbuf, uint32_t codepoint);
+
 FF_C_NODISCARD static inline FFstrbuf ffStrbufCreateA(uint32_t allocate)
 {
     FFstrbuf strbuf;
@@ -99,8 +107,13 @@ FF_C_NODISCARD static inline FFstrbuf ffStrbufCreateA(uint32_t allocate)
 
 static inline void ffStrbufInitCopy(FFstrbuf* __restrict strbuf, const FFstrbuf* __restrict src)
 {
-    ffStrbufInitA(strbuf, src->allocated);
-    ffStrbufAppend(strbuf, src);
+    if (src->allocated == 0) // static string
+        memcpy(strbuf, src, sizeof(FFstrbuf));
+    else
+    {
+        ffStrbufInitA(strbuf, src->allocated);
+        ffStrbufAppend(strbuf, src);
+    }
 }
 
 FF_C_NODISCARD static inline FFstrbuf ffStrbufCreateCopy(const FFstrbuf* src)
@@ -198,12 +211,45 @@ static inline void ffStrbufAppendS(FFstrbuf* strbuf, const char* value)
     ffStrbufAppendNS(strbuf, (uint32_t) strlen(value), value);
 }
 
+static inline bool ffStrbufAppendJsonVal(FFstrbuf* strbuf, yyjson_val* jsonVal)
+{
+    if (yyjson_is_str(jsonVal))
+    {
+        ffStrbufAppendNS(strbuf, (uint32_t) unsafe_yyjson_get_len(jsonVal), unsafe_yyjson_get_str(jsonVal));
+        return true;
+    }
+    return false;
+}
+
 static inline void ffStrbufSetS(FFstrbuf* strbuf, const char* value)
 {
     ffStrbufClear(strbuf);
 
     if(value != NULL)
         ffStrbufAppendNS(strbuf, (uint32_t) strlen(value), value);
+}
+
+static inline void ffStrbufSetNS(FFstrbuf* strbuf, uint32_t length, const char* value)
+{
+    ffStrbufClear(strbuf);
+    ffStrbufAppendNS(strbuf, length, value);
+}
+
+static inline void ffStrbufSet(FFstrbuf* strbuf, const FFstrbuf* value)
+{
+    assert(value && value != strbuf);
+    if (strbuf->allocated == 0 && value->allocated == 0)
+    {
+        memcpy(strbuf, value, sizeof(FFstrbuf));
+        return;
+    }
+    ffStrbufSetNS(strbuf, value->length, value->chars);
+}
+
+static inline bool ffStrbufSetJsonVal(FFstrbuf* strbuf, yyjson_val* jsonVal)
+{
+    ffStrbufClear(strbuf);
+    return ffStrbufAppendJsonVal(strbuf, jsonVal);
 }
 
 static inline void ffStrbufInit(FFstrbuf* strbuf)
@@ -214,7 +260,7 @@ static inline void ffStrbufInit(FFstrbuf* strbuf)
     strbuf->chars = CHAR_NULL_PTR;
 }
 
-FF_C_NODISCARD static inline FFstrbuf ffStrbufCreate()
+FF_C_NODISCARD static inline FFstrbuf ffStrbufCreate(void)
 {
     FFstrbuf strbuf;
     ffStrbufInit(&strbuf);
@@ -258,6 +304,12 @@ FF_C_NODISCARD static inline FFstrbuf ffStrbufCreateNS(uint32_t length, const ch
     FFstrbuf strbuf;
     ffStrbufInitNS(&strbuf, length, str);
     return strbuf;
+}
+
+static inline bool ffStrbufInitJsonVal(FFstrbuf* strbuf, yyjson_val* jsonVal)
+{
+    ffStrbufInit(strbuf);
+    return ffStrbufAppendJsonVal(strbuf, jsonVal);
 }
 
 static inline void ffStrbufInitS(FFstrbuf* strbuf, const char* str)
@@ -379,7 +431,7 @@ static inline FF_C_NODISCARD uint32_t ffStrbufFirstIndexS(const FFstrbuf* strbuf
 static inline FF_C_NODISCARD uint32_t ffStrbufLastIndexC(const FFstrbuf* strbuf, char c)
 {
     if(strbuf->length == 0)
-        return strbuf->length;
+        return 0;
 
     return ffStrbufPreviousIndexC(strbuf, strbuf->length - 1, c);
 }
@@ -453,7 +505,7 @@ static inline FF_C_NODISCARD bool ffStrbufEndsWithS(const FFstrbuf* strbuf, cons
     return ffStrbufEndsWithNS(strbuf, (uint32_t) strlen(end), end);
 }
 
-static inline FF_C_NODISCARD bool ffStrbufEndsWithFn(const FFstrbuf* strbuf, int (*fn)(int))
+static inline FF_C_NODISCARD bool ffStrbufEndsWithFn(const FFstrbuf* strbuf, int (*const fn)(int))
 {
     return strbuf->length == 0 ? false :
         fn(strbuf->chars[strbuf->length - 1]);
@@ -487,6 +539,20 @@ static inline void ffStrbufTrim(FFstrbuf* strbuf, char c)
     ffStrbufTrimLeft(strbuf, c);
 }
 
-#define FF_STRBUF_AUTO_DESTROY FFstrbuf __attribute__((__cleanup__(ffStrbufDestroy)))
+static inline void ffStrbufTrimSpace(FFstrbuf* strbuf)
+{
+    ffStrbufTrimRightSpace(strbuf);
+    ffStrbufTrimLeftSpace(strbuf);
+}
 
-#endif
+static inline bool ffStrbufMatchSeparatedS(const FFstrbuf* strbuf, const char* comp, char separator)
+{
+    return ffStrbufMatchSeparatedNS(strbuf, (uint32_t) strlen(comp), comp, separator);
+}
+
+static inline bool ffStrbufMatchSeparated(const FFstrbuf* strbuf, const FFstrbuf* comp, char separator)
+{
+    return ffStrbufMatchSeparatedNS(strbuf, comp->length, comp->chars, separator);
+}
+
+#define FF_STRBUF_AUTO_DESTROY FFstrbuf __attribute__((__cleanup__(ffStrbufDestroy)))

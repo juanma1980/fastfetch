@@ -1,6 +1,7 @@
 #pragma once
 
 #include "fastfetch.h"
+#include "modules/bluetooth/option.h"
 
 typedef struct FFBluetoothResult
 {
@@ -11,4 +12,4 @@ typedef struct FFBluetoothResult
     bool connected;
 } FFBluetoothResult;
 
-const char* ffDetectBluetooth(FFlist* devices /* FFBluetoothResult */);
+const char* ffDetectBluetooth(FFBluetoothOptions* options, FFlist* devices /* FFBluetoothResult */);

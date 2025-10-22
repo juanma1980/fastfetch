@@ -4,8 +4,6 @@
 #include "modules/bios/bios.h"
 #include "util/stringUtils.h"
 
-#define FF_BIOS_NUM_FORMAT_ARGS 5
-
 void ffPrintBios(FFBiosOptions* options)
 {
     FFBiosResult bios;
@@ -43,7 +41,7 @@ void ffPrintBios(FFBiosOptions* options)
     else
     {
         ffStrbufClear(&key);
-        FF_PARSE_FORMAT_STRING_CHECKED(&key, &options->moduleArgs.key, 2, ((FFformatarg[]){
+        FF_PARSE_FORMAT_STRING_CHECKED(&key, &options->moduleArgs.key, ((FFformatarg[]) {
             FF_FORMAT_ARG(bios.type, "type"),
             FF_FORMAT_ARG(options->moduleArgs.keyIcon, "icon"),
         }));
@@ -60,7 +58,7 @@ void ffPrintBios(FFBiosOptions* options)
     }
     else
     {
-        FF_PRINT_FORMAT_CHECKED(key.chars, 0, &options->moduleArgs, FF_PRINT_TYPE_NO_CUSTOM_KEY, FF_BIOS_NUM_FORMAT_ARGS, ((FFformatarg[]) {
+        FF_PRINT_FORMAT_CHECKED(key.chars, 0, &options->moduleArgs, FF_PRINT_TYPE_NO_CUSTOM_KEY, ((FFformatarg[]) {
             FF_FORMAT_ARG(bios.date, "date"),
             FF_FORMAT_ARG(bios.release, "release"),
             FF_FORMAT_ARG(bios.vendor, "vendor"),
@@ -77,30 +75,16 @@ exit:
     ffStrbufDestroy(&bios.type);
 }
 
-bool ffParseBiosCommandOptions(FFBiosOptions* options, const char* key, const char* value)
-{
-    const char* subKey = ffOptionTestPrefix(key, FF_BIOS_MODULE_NAME);
-    if (!subKey) return false;
-    if (ffOptionParseModuleArgs(key, subKey, value, &options->moduleArgs))
-        return true;
-
-    return false;
-}
-
 void ffParseBiosJsonObject(FFBiosOptions* options, yyjson_val* module)
 {
-    yyjson_val *key_, *val;
+    yyjson_val *key, *val;
     size_t idx, max;
-    yyjson_obj_foreach(module, idx, max, key_, val)
+    yyjson_obj_foreach(module, idx, max, key, val)
     {
-        const char* key = yyjson_get_str(key_);
-        if(ffStrEqualsIgnCase(key, "type"))
-            continue;
-
         if (ffJsonConfigParseModuleArgs(key, val, &options->moduleArgs))
             continue;
 
-        ffPrintError(FF_BIOS_MODULE_NAME, 0, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, "Unknown JSON key %s", key);
+        ffPrintError(FF_BIOS_MODULE_NAME, 0, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, "Unknown JSON key %s", unsafe_yyjson_get_str(key));
     }
 }
 
@@ -144,30 +128,8 @@ exit:
     ffStrbufDestroy(&bios.type);
 }
 
-void ffPrintBiosHelpFormat(void)
-{
-    FF_PRINT_MODULE_FORMAT_HELP_CHECKED(FF_BIOS_MODULE_NAME, "{4} ({2})", FF_BIOS_NUM_FORMAT_ARGS, ((const char* []) {
-        "bios date - date",
-        "bios release - release",
-        "bios vendor - vendor",
-        "bios version - version",
-        "firmware type - type",
-    }));
-}
-
 void ffInitBiosOptions(FFBiosOptions* options)
 {
-    ffOptionInitModuleBaseInfo(
-        &options->moduleInfo,
-        FF_BIOS_MODULE_NAME,
-        "Print information of 1st-stage bootloader (name, version, release date, etc)",
-        ffParseBiosCommandOptions,
-        ffParseBiosJsonObject,
-        ffPrintBios,
-        ffGenerateBiosJsonResult,
-        ffPrintBiosHelpFormat,
-        ffGenerateBiosJsonConfig
-    );
     ffOptionInitModuleArg(&options->moduleArgs, "");
 }
 
@@ -175,3 +137,21 @@ void ffDestroyBiosOptions(FFBiosOptions* options)
 {
     ffOptionDestroyModuleArg(&options->moduleArgs);
 }
+
+FFModuleBaseInfo ffBiosModuleInfo = {
+    .name = FF_BIOS_MODULE_NAME,
+    .description = "Print information of 1st-stage bootloader (name, version, release date, etc)",
+    .initOptions = (void*) ffInitBiosOptions,
+    .destroyOptions = (void*) ffDestroyBiosOptions,
+    .parseJsonObject = (void*) ffParseBiosJsonObject,
+    .printModule = (void*) ffPrintBios,
+    .generateJsonResult = (void*) ffGenerateBiosJsonResult,
+    .generateJsonConfig = (void*) ffGenerateBiosJsonConfig,
+    .formatArgs = FF_FORMAT_ARG_LIST(((FFModuleFormatArg[]) {
+        {"Bios date", "date"},
+        {"Bios release", "release"},
+        {"Bios vendor", "vendor"},
+        {"Bios version", "version"},
+        {"Firmware type", "type"},
+    }))
+};

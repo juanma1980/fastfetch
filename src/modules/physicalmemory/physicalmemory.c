@@ -1,12 +1,11 @@
 #include "common/printing.h"
 #include "common/jsonconfig.h"
-#include "common/parsing.h"
 #include "common/percent.h"
+#include "common/size.h"
 #include "detection/physicalmemory/physicalmemory.h"
 #include "modules/physicalmemory/physicalmemory.h"
 #include "util/stringUtils.h"
 
-#define FF_PHYSICALMEMORY_NUM_FORMAT_ARGS 11
 #define FF_PHYSICALMEMORY_DISPLAY_NAME "Physical Memory"
 
 void ffPrintPhysicalMemory(FFPhysicalMemoryOptions* options)
@@ -33,7 +32,7 @@ void ffPrintPhysicalMemory(FFPhysicalMemoryOptions* options)
     {
         ++i;
         ffStrbufClear(&prettySize);
-        ffParseSize(device->size, &prettySize);
+        ffSizeAppendNum(device->size, &prettySize);
 
         if (options->moduleArgs.outputFormat.length == 0)
         {
@@ -54,7 +53,7 @@ void ffPrintPhysicalMemory(FFPhysicalMemoryOptions* options)
         }
         else
         {
-            FF_PRINT_FORMAT_CHECKED(FF_PHYSICALMEMORY_DISPLAY_NAME, (uint8_t) i, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, FF_PHYSICALMEMORY_NUM_FORMAT_ARGS, ((FFformatarg[]) {
+            FF_PRINT_FORMAT_CHECKED(FF_PHYSICALMEMORY_DISPLAY_NAME, (uint8_t) i, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, ((FFformatarg[]) {
                 FF_FORMAT_ARG(device->size, "bytes"),
                 FF_FORMAT_ARG(prettySize, "size"),
                 FF_FORMAT_ARG(device->maxSpeed, "max-speed"),
@@ -81,30 +80,16 @@ void ffPrintPhysicalMemory(FFPhysicalMemoryOptions* options)
     }
 }
 
-bool ffParsePhysicalMemoryCommandOptions(FFPhysicalMemoryOptions* options, const char* key, const char* value)
-{
-    const char* subKey = ffOptionTestPrefix(key, FF_PHYSICALMEMORY_MODULE_NAME);
-    if (!subKey) return false;
-    if (ffOptionParseModuleArgs(key, subKey, value, &options->moduleArgs))
-        return true;
-
-    return false;
-}
-
 void ffParsePhysicalMemoryJsonObject(FFPhysicalMemoryOptions* options, yyjson_val* module)
 {
-    yyjson_val *key_, *val;
+    yyjson_val *key, *val;
     size_t idx, max;
-    yyjson_obj_foreach(module, idx, max, key_, val)
+    yyjson_obj_foreach(module, idx, max, key, val)
     {
-        const char* key = yyjson_get_str(key_);
-        if(ffStrEqualsIgnCase(key, "type"))
-            continue;
-
         if (ffJsonConfigParseModuleArgs(key, val, &options->moduleArgs))
             continue;
 
-        ffPrintError(FF_PHYSICALMEMORY_MODULE_NAME, 0, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, "Unknown JSON key %s", key);
+        ffPrintError(FF_PHYSICALMEMORY_MODULE_NAME, 0, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, "Unknown JSON key %s", unsafe_yyjson_get_str(key));
     }
 }
 
@@ -154,36 +139,8 @@ void ffGeneratePhysicalMemoryJsonResult(FF_MAYBE_UNUSED FFPhysicalMemoryOptions*
     }
 }
 
-void ffPrintPhysicalMemoryHelpFormat(void)
-{
-    FF_PRINT_MODULE_FORMAT_HELP_CHECKED(FF_PHYSICALMEMORY_MODULE_NAME, "{7} {5}-{3}: {2}, running at {4} MT/s", FF_PHYSICALMEMORY_NUM_FORMAT_ARGS, ((const char* []) {
-        "Size (in bytes) - bytes",
-        "Size formatted - size",
-        "Max speed (in MT/s) - max-speed",
-        "Running speed (in MT/s) - running-speed",
-        "Type (DDR4, DDR5, etc.) - type",
-        "Form factor (SODIMM, DIMM, etc.) - form-factor",
-        "Bank/Device Locator (BANK0/SIMM0, BANK0/SIMM1, etc.) - locator",
-        "Vendor - vendor",
-        "Serial number - serial",
-        "Part number - part-number",
-        "True if ECC enabled - is-ecc-enabled",
-    }));
-}
-
 void ffInitPhysicalMemoryOptions(FFPhysicalMemoryOptions* options)
 {
-    ffOptionInitModuleBaseInfo(
-        &options->moduleInfo,
-        FF_PHYSICALMEMORY_MODULE_NAME,
-        "Print system physical memory devices",
-        ffParsePhysicalMemoryCommandOptions,
-        ffParsePhysicalMemoryJsonObject,
-        ffPrintPhysicalMemory,
-        ffGeneratePhysicalMemoryJsonResult,
-        ffPrintPhysicalMemoryHelpFormat,
-        ffGeneratePhysicalMemoryJsonConfig
-    );
     ffOptionInitModuleArg(&options->moduleArgs, "󰑭");
 }
 
@@ -191,3 +148,27 @@ void ffDestroyPhysicalMemoryOptions(FFPhysicalMemoryOptions* options)
 {
     ffOptionDestroyModuleArg(&options->moduleArgs);
 }
+
+FFModuleBaseInfo ffPhysicalMemoryModuleInfo = {
+    .name = FF_PHYSICALMEMORY_MODULE_NAME,
+    .description = "Print system physical memory devices",
+    .initOptions = (void*) ffInitPhysicalMemoryOptions,
+    .destroyOptions = (void*) ffDestroyPhysicalMemoryOptions,
+    .parseJsonObject = (void*) ffParsePhysicalMemoryJsonObject,
+    .printModule = (void*) ffPrintPhysicalMemory,
+    .generateJsonConfig = (void*) ffGeneratePhysicalMemoryJsonConfig,
+    .generateJsonResult = (void*) ffGeneratePhysicalMemoryJsonResult,
+    .formatArgs = FF_FORMAT_ARG_LIST(((FFModuleFormatArg[]) {
+        {"Size (in bytes)", "bytes"},
+        {"Size formatted", "size"},
+        {"Max speed (in MT/s)", "max-speed"},
+        {"Running speed (in MT/s)", "running-speed"},
+        {"Type (DDR4, DDR5, etc.)", "type"},
+        {"Form factor (SODIMM, DIMM, etc.)", "form-factor"},
+        {"Bank/Device Locator (BANK0/SIMM0, BANK0/SIMM1, etc.)", "locator"},
+        {"Vendor", "vendor"},
+        {"Serial number", "serial"},
+        {"Part number", "part-number"},
+        {"True if ECC enabled", "is-ecc-enabled"},
+    }))
+};

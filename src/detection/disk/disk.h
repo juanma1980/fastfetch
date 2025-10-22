@@ -1,6 +1,7 @@
 #pragma once
 
 #include "fastfetch.h"
+#include "modules/disk/option.h"
 
 typedef struct FFDisk
 {
@@ -28,4 +29,4 @@ typedef struct FFDisk
 const char* ffDetectDisks(FFDiskOptions* options, FFlist* disks /* list of FFDisk */);
 
 const char* ffDetectDisksImpl(FFDiskOptions* options, FFlist* disks);
-bool ffDiskMatchMountpoint(FFDiskOptions* options, const char* mountpoint);
+bool ffDiskMatchMountpoint(FFstrbuf* folders, const char* mountpoint);

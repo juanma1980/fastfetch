@@ -4,6 +4,7 @@
 #include "common/printing.h"
 #include "common/io/io.h"
 #include "common/time.h"
+#include "detection/version/version.h"
 #include "modules/modules.h"
 #include "util/stringUtils.h"
 
@@ -11,36 +12,39 @@
 #include <ctype.h>
 #include <inttypes.h>
 
-bool ffJsonConfigParseModuleArgs(const char* key, yyjson_val* val, FFModuleArgs* moduleArgs)
+bool ffJsonConfigParseModuleArgs(yyjson_val* key, yyjson_val* val, FFModuleArgs* moduleArgs)
 {
-    if(ffStrEqualsIgnCase(key, "key"))
+    if (unsafe_yyjson_equals_str(key, "type") || unsafe_yyjson_equals_str(key, "condition"))
+        return true;
+
+    if (unsafe_yyjson_equals_str(key, "key"))
     {
-        ffStrbufSetNS(&moduleArgs->key, (uint32_t) yyjson_get_len(val), yyjson_get_str(val));
+        ffStrbufSetJsonVal(&moduleArgs->key, val);
         return true;
     }
-    else if(ffStrEqualsIgnCase(key, "format"))
+    else if (unsafe_yyjson_equals_str(key, "format"))
     {
-        ffStrbufSetNS(&moduleArgs->outputFormat, (uint32_t) yyjson_get_len(val), yyjson_get_str(val));
+        ffStrbufSetJsonVal(&moduleArgs->outputFormat, val);
         return true;
     }
-    else if(ffStrEqualsIgnCase(key, "outputColor"))
+    else if (unsafe_yyjson_equals_str(key, "outputColor"))
     {
         ffOptionParseColor(yyjson_get_str(val), &moduleArgs->outputColor);
         return true;
     }
-    else if(ffStrEqualsIgnCase(key, "keyColor"))
+    else if (unsafe_yyjson_equals_str(key, "keyColor"))
     {
         ffOptionParseColor(yyjson_get_str(val), &moduleArgs->keyColor);
         return true;
     }
-    else if(ffStrEqualsIgnCase(key, "keyWidth"))
+    else if (unsafe_yyjson_equals_str(key, "keyWidth"))
     {
         moduleArgs->keyWidth = (uint32_t) yyjson_get_uint(val);
         return true;
     }
-    else if(ffStrEqualsIgnCase(key, "keyIcon"))
+    else if (unsafe_yyjson_equals_str(key, "keyIcon"))
     {
-        ffStrbufSetS(&moduleArgs->keyIcon, yyjson_get_str(val));
+        ffStrbufSetJsonVal(&moduleArgs->keyIcon, val);
         return true;
     }
     return false;
@@ -95,12 +99,12 @@ const char* ffJsonConfigParseEnum(yyjson_val* val, int* result, FFKeyValuePair p
         return "Invalid enum value type; must be a string or integer";
 }
 
-static inline void genJsonResult(FFModuleBaseInfo* baseInfo, yyjson_mut_doc* doc)
+static inline void genJsonResult(FFModuleBaseInfo* baseInfo, void* options, yyjson_mut_doc* doc)
 {
     yyjson_mut_val* module = yyjson_mut_arr_add_obj(doc, doc->root);
     yyjson_mut_obj_add_str(doc, module, "type", baseInfo->name);
     if (baseInfo->generateJsonResult)
-        baseInfo->generateJsonResult(baseInfo, doc, module);
+        baseInfo->generateJsonResult(options, doc, module);
     else
         yyjson_mut_obj_add_str(doc, module, "error", "Unsupported for JSON format");
 }
@@ -114,11 +118,14 @@ static bool parseModuleJsonObject(const char* type, yyjson_val* jsonVal, yyjson_
         FFModuleBaseInfo* baseInfo = *modules;
         if (ffStrEqualsIgnCase(type, baseInfo->name))
         {
-            if (jsonVal) baseInfo->parseJsonObject(baseInfo, jsonVal);
+            uint8_t optionBuf[FF_OPTION_MAX_SIZE];
+            baseInfo->initOptions(optionBuf);
+            if (jsonVal) baseInfo->parseJsonObject(optionBuf, jsonVal);
             if (__builtin_expect(jsonDoc != NULL, false))
-                genJsonResult(baseInfo, jsonDoc);
+                genJsonResult(baseInfo, optionBuf, jsonDoc);
             else
-                baseInfo->printModule(baseInfo);
+                baseInfo->printModule(optionBuf);
+            baseInfo->destroyOptions(optionBuf);
             return true;
         }
     }
@@ -127,7 +134,6 @@ static bool parseModuleJsonObject(const char* type, yyjson_val* jsonVal, yyjson_
 
 static void prepareModuleJsonObject(const char* type, yyjson_val* module)
 {
-    FFconfig* cfg = &instance.config;
     switch (type[0])
     {
         case 'b': case 'B': {
@@ -138,36 +144,63 @@ static void prepareModuleJsonObject(const char* type, yyjson_val* module)
         case 'd': case 'D': {
             if (ffStrEqualsIgnCase(type, FF_DISKIO_MODULE_NAME))
             {
-                if (module) cfg->modules.diskIo.moduleInfo.parseJsonObject(&cfg->modules.diskIo, module);
-                ffPrepareDiskIO(&cfg->modules.diskIo);
+                __attribute__((__cleanup__(ffDestroyDiskIOOptions))) FFDiskIOOptions options;
+                ffInitDiskIOOptions(&options);
+                if (module) ffDiskIOModuleInfo.parseJsonObject(&options, module);
+                ffPrepareDiskIO(&options);
             }
             break;
         }
         case 'n': case 'N': {
             if (ffStrEqualsIgnCase(type, FF_NETIO_MODULE_NAME))
             {
-                if (module) cfg->modules.netIo.moduleInfo.parseJsonObject(&cfg->modules.netIo, module);
-                ffPrepareNetIO(&cfg->modules.netIo);
+                __attribute__((__cleanup__(ffDestroyNetIOOptions))) FFNetIOOptions options;
+                ffInitNetIOOptions(&options);
+                if (module) ffNetIOModuleInfo.parseJsonObject(&options, module);
+                ffPrepareNetIO(&options);
             }
             break;
         }
         case 'p': case 'P': {
             if (ffStrEqualsIgnCase(type, FF_PUBLICIP_MODULE_NAME))
             {
-                if (module) cfg->modules.publicIP.moduleInfo.parseJsonObject(&cfg->modules.publicIP, module);
-                ffPreparePublicIp(&cfg->modules.publicIP);
+                __attribute__((__cleanup__(ffDestroyPublicIpOptions))) FFPublicIPOptions options;
+                ffInitPublicIpOptions(&options);
+                if (module) ffPublicIPModuleInfo.parseJsonObject(&options, module);
+                ffPreparePublicIp(&options);
             }
             break;
         }
         case 'w': case 'W': {
             if (ffStrEqualsIgnCase(type, FF_WEATHER_MODULE_NAME))
             {
-                if (module) cfg->modules.weather.moduleInfo.parseJsonObject(&cfg->modules.weather, module);
-                ffPrepareWeather(&cfg->modules.weather);
+                __attribute__((__cleanup__(ffDestroyWeatherOptions))) FFWeatherOptions options;
+                ffInitWeatherOptions(&options);
+                if (module) ffWeatherModuleInfo.parseJsonObject(&options, module);
+                ffPrepareWeather(&options);
             }
             break;
         }
     }
+}
+
+static bool matchesJsonArray(const char* str, yyjson_val* val)
+{
+    assert(val);
+
+    if (unsafe_yyjson_is_str(val))
+        return ffStrEqualsIgnCase(str, unsafe_yyjson_get_str(val));
+
+    if (!unsafe_yyjson_is_arr(val)) return false;
+
+    size_t idx, max;
+    yyjson_val* item;
+    yyjson_arr_foreach(val, idx, max, item)
+    {
+        if (yyjson_is_str(item) && ffStrEqualsIgnCase(str, unsafe_yyjson_get_str(item)))
+            return true;
+    }
+    return false;
 }
 
 static const char* printJsonConfig(bool prepare, yyjson_mut_doc* jsonDoc)
@@ -197,6 +230,29 @@ static const char* printJsonConfig(bool prepare, yyjson_mut_doc* jsonDoc)
             module = NULL;
         else if (yyjson_is_obj(module))
         {
+            yyjson_val* conditions = yyjson_obj_get(module, "condition");
+            if (conditions)
+            {
+                if (!yyjson_is_obj(conditions))
+                    return "Property 'conditions' must be an object";
+
+                yyjson_val* system = yyjson_obj_get(conditions, "system");
+                if (system && !matchesJsonArray(ffVersionResult.sysName, system))
+                    continue;
+
+                system = yyjson_obj_get(conditions, "!system");
+                if (system && matchesJsonArray(ffVersionResult.sysName, system))
+                    continue;
+
+                yyjson_val* arch = yyjson_obj_get(conditions, "arch");
+                if (arch && !matchesJsonArray(ffVersionResult.architecture, arch))
+                    continue;
+
+                arch = yyjson_obj_get(conditions, "!arch");
+                if (arch && matchesJsonArray(ffVersionResult.architecture, arch))
+                    continue;
+            }
+
             type = yyjson_get_str(yyjson_obj_get(module, "type"));
             if (!type) return "module object must contain a \"type\" key ( case sensitive )";
             if (yyjson_obj_size(module) == 1) // contains only Property type
@@ -224,7 +280,7 @@ static const char* printJsonConfig(bool prepare, yyjson_mut_doc* jsonDoc)
                 int len = snprintf(str, sizeof str, "%.3fms", ms);
                 if (thres > 0)
                     snprintf(str, sizeof str, "\e[%sm%.3fms\e[m", (ms <= thres ? FF_COLOR_FG_GREEN : ms <= 2 * thres ? FF_COLOR_FG_YELLOW : FF_COLOR_FG_RED), ms);
-                printf("\e[s\e[1A\e[9999999C\e[%dD%s\e[u", len, str); // Save; Up 1; Right 9999999; Left <len>; Print <str>; Load
+                printf("\e7\e[1A\e[9999999C\e[%dD%s\e8", len, str); // Save; Up 1; Right 9999999; Left <len>; Print <str>; Load
             }
         }
 

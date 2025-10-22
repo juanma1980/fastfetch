@@ -4,10 +4,6 @@
 #include "modules/terminal/terminal.h"
 #include "util/stringUtils.h"
 
-#include <string.h>
-
-#define FF_TERMINAL_NUM_FORMAT_ARGS 8
-
 void ffPrintTerminal(FFTerminalOptions* options)
 {
     const FFTerminalResult* result = ffDetectTerminal();
@@ -29,7 +25,7 @@ void ffPrintTerminal(FFTerminalOptions* options)
     }
     else
     {
-        FF_PRINT_FORMAT_CHECKED(FF_TERMINAL_MODULE_NAME, 0, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, FF_TERMINAL_NUM_FORMAT_ARGS, ((FFformatarg[]){
+        FF_PRINT_FORMAT_CHECKED(FF_TERMINAL_MODULE_NAME, 0, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, ((FFformatarg[]){
             FF_FORMAT_ARG(result->processName, "process-name"),
             FF_FORMAT_ARG(result->exe, "exe"),
             FF_FORMAT_ARG(result->exeName, "exe-name"),
@@ -42,30 +38,16 @@ void ffPrintTerminal(FFTerminalOptions* options)
     }
 }
 
-bool ffParseTerminalCommandOptions(FFTerminalOptions* options, const char* key, const char* value)
-{
-    const char* subKey = ffOptionTestPrefix(key, FF_TERMINAL_MODULE_NAME);
-    if (!subKey) return false;
-    if (ffOptionParseModuleArgs(key, subKey, value, &options->moduleArgs))
-        return true;
-
-    return false;
-}
-
 void ffParseTerminalJsonObject(FFTerminalOptions* options, yyjson_val* module)
 {
-    yyjson_val *key_, *val;
+    yyjson_val *key, *val;
     size_t idx, max;
-    yyjson_obj_foreach(module, idx, max, key_, val)
+    yyjson_obj_foreach(module, idx, max, key, val)
     {
-        const char* key = yyjson_get_str(key_);
-        if(ffStrEqualsIgnCase(key, "type"))
-            continue;
-
         if (ffJsonConfigParseModuleArgs(key, val, &options->moduleArgs))
             continue;
 
-        ffPrintError(FF_TERMINAL_MODULE_NAME, 0, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, "Unknown JSON key %s", key);
+        ffPrintError(FF_TERMINAL_MODULE_NAME, 0, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, "Unknown JSON key %s", unsafe_yyjson_get_str(key));
     }
 }
 
@@ -99,33 +81,8 @@ void ffGenerateTerminalJsonResult(FF_MAYBE_UNUSED FFTerminalOptions* options, yy
     yyjson_mut_obj_add_strbuf(doc, obj, "tty", &result->tty);
 }
 
-void ffPrintTerminalHelpFormat(void)
-{
-    FF_PRINT_MODULE_FORMAT_HELP_CHECKED(FF_TERMINAL_MODULE_NAME, "{5} {6}", FF_TERMINAL_NUM_FORMAT_ARGS, ((const char* []) {
-        "Terminal process name - process-name",
-        "The first argument of the command line when running the terminal - exe",
-        "Terminal base name of arg0 - exe-name",
-        "Terminal pid - pid",
-        "Terminal pretty name - pretty-name",
-        "Terminal version - version",
-        "Terminal full exe path - exe-path",
-        "Terminal tty / pts used - tty",
-    }));
-}
-
 void ffInitTerminalOptions(FFTerminalOptions* options)
 {
-    ffOptionInitModuleBaseInfo(
-        &options->moduleInfo,
-        FF_TERMINAL_MODULE_NAME,
-        "Print current terminal name and version",
-        ffParseTerminalCommandOptions,
-        ffParseTerminalJsonObject,
-        ffPrintTerminal,
-        ffGenerateTerminalJsonResult,
-        ffPrintTerminalHelpFormat,
-        ffGenerateTerminalJsonConfig
-    );
     ffOptionInitModuleArg(&options->moduleArgs, "");
 }
 
@@ -133,3 +90,24 @@ void ffDestroyTerminalOptions(FFTerminalOptions* options)
 {
     ffOptionDestroyModuleArg(&options->moduleArgs);
 }
+
+FFModuleBaseInfo ffTerminalModuleInfo = {
+    .name = FF_TERMINAL_MODULE_NAME,
+    .description = "Print current terminal name and version",
+    .initOptions = (void*) ffInitTerminalOptions,
+    .destroyOptions = (void*) ffDestroyTerminalOptions,
+    .parseJsonObject = (void*) ffParseTerminalJsonObject,
+    .printModule = (void*) ffPrintTerminal,
+    .generateJsonResult = (void*) ffGenerateTerminalJsonResult,
+    .generateJsonConfig = (void*) ffGenerateTerminalJsonConfig,
+    .formatArgs = FF_FORMAT_ARG_LIST(((FFModuleFormatArg[]) {
+        {"Terminal process name", "process-name"},
+        {"The first argument of the command line when running the terminal", "exe"},
+        {"Terminal base name of arg0", "exe-name"},
+        {"Terminal pid", "pid"},
+        {"Terminal pretty name", "pretty-name"},
+        {"Terminal version", "version"},
+        {"Terminal full exe path", "exe-path"},
+        {"Terminal tty / pts used", "tty"},
+    }))
+};

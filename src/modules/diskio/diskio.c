@@ -1,12 +1,11 @@
 #include "common/printing.h"
 #include "common/jsonconfig.h"
-#include "common/parsing.h"
+#include "common/size.h"
 #include "detection/diskio/diskio.h"
 #include "modules/diskio/diskio.h"
 #include "util/stringUtils.h"
 
 #define FF_DISKIO_DISPLAY_NAME "Disk IO"
-#define FF_DISKIO_NUM_FORMAT_ARGS 8
 
 static int sortDevices(const FFDiskIOResult* left, const FFDiskIOResult* right)
 {
@@ -22,7 +21,7 @@ static void formatKey(const FFDiskIOOptions* options, FFDiskIOResult* dev, uint3
     else
     {
         ffStrbufClear(key);
-        FF_PARSE_FORMAT_STRING_CHECKED(key, &options->moduleArgs.key, 4, ((FFformatarg[]){
+        FF_PARSE_FORMAT_STRING_CHECKED(key, &options->moduleArgs.key, ((FFformatarg[]){
             FF_FORMAT_ARG(index, "index"),
             FF_FORMAT_ARG(dev->name, "name"),
             FF_FORMAT_ARG(dev->devPath, "dev-path"),
@@ -58,24 +57,24 @@ void ffPrintDiskIO(FFDiskIOOptions* options)
         {
             ffPrintLogoAndKey(key.chars, 0, &options->moduleArgs, FF_PRINT_TYPE_NO_CUSTOM_KEY);
 
-            ffParseSize(dev->bytesRead, &buffer);
+            ffSizeAppendNum(dev->bytesRead, &buffer);
             if (!options->detectTotal) ffStrbufAppendS(&buffer, "/s");
             ffStrbufAppendS(&buffer, " (R) - ");
 
-            ffParseSize(dev->bytesWritten, &buffer);
+            ffSizeAppendNum(dev->bytesWritten, &buffer);
             if (!options->detectTotal) ffStrbufAppendS(&buffer, "/s");
             ffStrbufAppendS(&buffer, " (W)");
             ffStrbufPutTo(&buffer, stdout);
         }
         else
         {
+            ffSizeAppendNum(dev->bytesRead, &buffer);
+            if (!options->detectTotal) ffStrbufAppendS(&buffer, "/s");
             ffStrbufClear(&buffer2);
-            ffParseSize(dev->bytesRead, &buffer);
-            if (!options->detectTotal) ffStrbufAppendS(&buffer, "/s");
-            ffParseSize(dev->bytesWritten, &buffer2);
-            if (!options->detectTotal) ffStrbufAppendS(&buffer, "/s");
+            ffSizeAppendNum(dev->bytesWritten, &buffer2);
+            if (!options->detectTotal) ffStrbufAppendS(&buffer2, "/s");
 
-            FF_PRINT_FORMAT_CHECKED(key.chars, 0, &options->moduleArgs, FF_PRINT_TYPE_NO_CUSTOM_KEY, FF_DISKIO_NUM_FORMAT_ARGS, ((FFformatarg[]){
+            FF_PRINT_FORMAT_CHECKED(key.chars, 0, &options->moduleArgs, FF_PRINT_TYPE_NO_CUSTOM_KEY, ((FFformatarg[]){
                 FF_FORMAT_ARG(buffer, "size-read"),
                 FF_FORMAT_ARG(buffer2, "size-written"),
                 FF_FORMAT_ARG(dev->name, "name"),
@@ -96,54 +95,34 @@ void ffPrintDiskIO(FFDiskIOOptions* options)
     }
 }
 
-bool ffParseDiskIOCommandOptions(FFDiskIOOptions* options, const char* key, const char* value)
-{
-    const char* subKey = ffOptionTestPrefix(key, FF_DISKIO_MODULE_NAME);
-    if (!subKey) return false;
-    if (ffOptionParseModuleArgs(key, subKey, value, &options->moduleArgs))
-        return true;
-
-    if (ffStrEqualsIgnCase(subKey, "name-prefix"))
-    {
-        ffOptionParseString(key, value, &options->namePrefix);
-        return true;
-    }
-
-    if (ffStrEqualsIgnCase(subKey, "detect-total"))
-    {
-        options->detectTotal = ffOptionParseBoolean(value);
-        return true;
-    }
-
-    return false;
-}
-
 void ffParseDiskIOJsonObject(FFDiskIOOptions* options, yyjson_val* module)
 {
-    yyjson_val *key_, *val;
+    yyjson_val *key, *val;
     size_t idx, max;
-    yyjson_obj_foreach(module, idx, max, key_, val)
+    yyjson_obj_foreach(module, idx, max, key, val)
     {
-        const char* key = yyjson_get_str(key_);
-        if(ffStrEqualsIgnCase(key, "type"))
-            continue;
-
         if (ffJsonConfigParseModuleArgs(key, val, &options->moduleArgs))
             continue;
 
-        if (ffStrEqualsIgnCase(key, "namePrefix"))
+        if (unsafe_yyjson_equals_str(key, "namePrefix"))
         {
-            ffStrbufSetS(&options->namePrefix, yyjson_get_str(val));
+            ffStrbufSetJsonVal(&options->namePrefix, val);
             continue;
         }
 
-        if (ffStrEqualsIgnCase(key, "detectTotal"))
+        if (unsafe_yyjson_equals_str(key, "detectTotal"))
         {
             options->detectTotal = yyjson_get_bool(val);
             continue;
         }
 
-        ffPrintError(FF_DISKIO_MODULE_NAME, 0, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, "Unknown JSON key %s", key);
+        if (unsafe_yyjson_equals_str(key, "waitTime"))
+        {
+            options->waitTime = (uint32_t) yyjson_get_uint(val);
+            continue;
+        }
+
+        ffPrintError(FF_DISKIO_MODULE_NAME, 0, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, "Unknown JSON key %s", unsafe_yyjson_get_str(key));
     }
 }
 
@@ -191,37 +170,13 @@ void ffGenerateDiskIOJsonResult(FFDiskIOOptions* options, yyjson_mut_doc* doc, y
     }
 }
 
-void ffPrintDiskIOHelpFormat(void)
-{
-    FF_PRINT_MODULE_FORMAT_HELP_CHECKED(FF_DISKIO_MODULE_NAME, "{1} (R) - {2} (W)", FF_DISKIO_NUM_FORMAT_ARGS, ((const char* []) {
-        "Size of data read [per second] (formatted) - size-read",
-        "Size of data written [per second] (formatted) - size-written",
-        "Device name - name",
-        "Device raw file path - dev-path",
-        "Size of data read [per second] (in bytes) - bytes-read",
-        "Size of data written [per second] (in bytes) - bytes-written",
-        "Number of reads - read-count",
-        "Number of writes - write-count",
-    }));
-}
-
 void ffInitDiskIOOptions(FFDiskIOOptions* options)
 {
-    ffOptionInitModuleBaseInfo(
-        &options->moduleInfo,
-        FF_DISKIO_MODULE_NAME,
-        "Print physical disk I/O throughput",
-        ffParseDiskIOCommandOptions,
-        ffParseDiskIOJsonObject,
-        ffPrintDiskIO,
-        ffGenerateDiskIOJsonResult,
-        ffPrintDiskIOHelpFormat,
-        ffGenerateDiskIOJsonConfig
-    );
     ffOptionInitModuleArg(&options->moduleArgs, "󰓅");
 
     ffStrbufInit(&options->namePrefix);
     options->detectTotal = false;
+    options->waitTime = 1000;
 }
 
 void ffDestroyDiskIOOptions(FFDiskIOOptions* options)
@@ -229,3 +184,24 @@ void ffDestroyDiskIOOptions(FFDiskIOOptions* options)
     ffOptionDestroyModuleArg(&options->moduleArgs);
     ffStrbufDestroy(&options->namePrefix);
 }
+
+FFModuleBaseInfo ffDiskIOModuleInfo = {
+    .name = FF_DISKIO_MODULE_NAME,
+    .description = "Print physical disk I/O throughput",
+    .initOptions = (void*) ffInitDiskIOOptions,
+    .destroyOptions = (void*) ffDestroyDiskIOOptions,
+    .parseJsonObject = (void*) ffParseDiskIOJsonObject,
+    .printModule = (void*) ffPrintDiskIO,
+    .generateJsonResult = (void*) ffGenerateDiskIOJsonResult,
+    .generateJsonConfig = (void*) ffGenerateDiskIOJsonConfig,
+    .formatArgs = FF_FORMAT_ARG_LIST(((FFModuleFormatArg[]) {
+        {"Size of data read [per second] (formatted)", "size-read"},
+        {"Size of data written [per second] (formatted)", "size-written"},
+        {"Device name", "name"},
+        {"Device raw file path", "dev-path"},
+        {"Size of data read [per second] (in bytes)", "bytes-read"},
+        {"Size of data written [per second] (in bytes)", "bytes-written"},
+        {"Number of reads", "read-count"},
+        {"Number of writes", "write-count"},
+    }))
+};

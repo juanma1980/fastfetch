@@ -1,6 +1,7 @@
 #pragma once
 
 #include "fastfetch.h"
+#include "modules/cpu/option.h"
 
 #define FF_CPU_TEMP_UNSET (0/0.0)
 
@@ -15,13 +16,13 @@ typedef struct FFCPUResult
     FFstrbuf name;
     FFstrbuf vendor;
 
+    uint16_t packages;
     uint16_t coresPhysical;
     uint16_t coresLogical;
     uint16_t coresOnline;
 
     uint32_t frequencyBase; // GHz
     uint32_t frequencyMax; // GHz
-    uint32_t frequencyBiosLimit; // GHz
 
     FFCPUCore coreTypes[16]; // number of P cores, E cores, etc.
 

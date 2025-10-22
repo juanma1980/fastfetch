@@ -12,6 +12,7 @@ void ffPlatformInit(FFPlatform* platform)
     ffStrbufInit(&platform->exePath);
 
     ffStrbufInit(&platform->userName);
+    ffStrbufInit(&platform->fullUserName);
     ffStrbufInit(&platform->hostName);
     ffStrbufInit(&platform->userShell);
 
@@ -48,6 +49,7 @@ void ffPlatformDestroy(FFPlatform* platform)
     ffStrbufDestroy(&platform->userName);
     ffStrbufDestroy(&platform->hostName);
     ffStrbufDestroy(&platform->userShell);
+    ffStrbufDestroy(&platform->fullUserName);
 
     FFPlatformSysinfo* info = &platform->sysinfo;
     ffStrbufDestroy(&info->architecture);

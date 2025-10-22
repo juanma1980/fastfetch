@@ -5,8 +5,6 @@
 #include "modules/vulkan/vulkan.h"
 #include "util/stringUtils.h"
 
-#define FF_VULKAN_NUM_FORMAT_ARGS 4
-
 void ffPrintVulkan(FFVulkanOptions* options)
 {
     const FFVulkanResult* vulkan = ffDetectVulkan();
@@ -43,7 +41,7 @@ void ffPrintVulkan(FFVulkanOptions* options)
     }
     else
     {
-        FF_PRINT_FORMAT_CHECKED(FF_VULKAN_MODULE_NAME, 0, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, FF_VULKAN_NUM_FORMAT_ARGS, ((FFformatarg[]) {
+        FF_PRINT_FORMAT_CHECKED(FF_VULKAN_MODULE_NAME, 0, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, ((FFformatarg[]) {
             FF_FORMAT_ARG(vulkan->driver, "driver"),
             FF_FORMAT_ARG(vulkan->apiVersion, "api-version"),
             FF_FORMAT_ARG(vulkan->conformanceVersion, "conformance-version"),
@@ -52,30 +50,16 @@ void ffPrintVulkan(FFVulkanOptions* options)
     }
 }
 
-bool ffParseVulkanCommandOptions(FFVulkanOptions* options, const char* key, const char* value)
-{
-    const char* subKey = ffOptionTestPrefix(key, FF_VULKAN_MODULE_NAME);
-    if (!subKey) return false;
-    if (ffOptionParseModuleArgs(key, subKey, value, &options->moduleArgs))
-        return true;
-
-    return false;
-}
-
 void ffParseVulkanJsonObject(FFVulkanOptions* options, yyjson_val* module)
 {
-    yyjson_val *key_, *val;
+    yyjson_val *key, *val;
     size_t idx, max;
-    yyjson_obj_foreach(module, idx, max, key_, val)
+    yyjson_obj_foreach(module, idx, max, key, val)
     {
-        const char* key = yyjson_get_str(key_);
-        if(ffStrEqualsIgnCase(key, "type"))
-            continue;
-
         if (ffJsonConfigParseModuleArgs(key, val, &options->moduleArgs))
             continue;
 
-        ffPrintError(FF_VULKAN_MODULE_NAME, 0, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, "Unknown JSON key %s", key);
+        ffPrintError(FF_VULKAN_MODULE_NAME, 0, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, "Unknown JSON key %s", unsafe_yyjson_get_str(key));
     }
 }
 
@@ -144,29 +128,8 @@ void ffGenerateVulkanJsonResult(FF_MAYBE_UNUSED FFVulkanOptions* options, yyjson
     }
 }
 
-void ffPrintVulkanHelpFormat(void)
-{
-    FF_PRINT_MODULE_FORMAT_HELP_CHECKED(FF_VULKAN_MODULE_NAME, "{2} - {1}", FF_VULKAN_NUM_FORMAT_ARGS, ((const char* []) {
-        "Driver name - driver",
-        "API version - api-version",
-        "Conformance version - conformance-version",
-        "Instance version - instance-version",
-    }));
-}
-
 void ffInitVulkanOptions(FFVulkanOptions* options)
 {
-    ffOptionInitModuleBaseInfo(
-        &options->moduleInfo,
-        FF_VULKAN_MODULE_NAME,
-        "Print highest Vulkan version supported by the GPU",
-        ffParseVulkanCommandOptions,
-        ffParseVulkanJsonObject,
-        ffPrintVulkan,
-        ffGenerateVulkanJsonResult,
-        ffPrintVulkanHelpFormat,
-        ffGenerateVulkanJsonConfig
-    );
     ffOptionInitModuleArg(&options->moduleArgs, "");
 }
 
@@ -174,3 +137,20 @@ void ffDestroyVulkanOptions(FFVulkanOptions* options)
 {
     ffOptionDestroyModuleArg(&options->moduleArgs);
 }
+
+FFModuleBaseInfo ffVulkanModuleInfo = {
+    .name = FF_VULKAN_MODULE_NAME,
+    .description = "Print highest Vulkan version supported by the GPU",
+    .initOptions = (void*) ffInitVulkanOptions,
+    .destroyOptions = (void*) ffDestroyVulkanOptions,
+    .parseJsonObject = (void*) ffParseVulkanJsonObject,
+    .printModule = (void*) ffPrintVulkan,
+    .generateJsonResult = (void*) ffGenerateVulkanJsonResult,
+    .generateJsonConfig = (void*) ffGenerateVulkanJsonConfig,
+    .formatArgs = FF_FORMAT_ARG_LIST(((FFModuleFormatArg[]) {
+        {"Driver name", "driver"},
+        {"API version", "api-version"},
+        {"Conformance version", "conformance-version"},
+        {"Instance version", "instance-version"},
+    }))
+};

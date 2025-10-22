@@ -6,6 +6,20 @@ struct yyjson_val;
 struct yyjson_mut_doc;
 struct yyjson_mut_val;
 
+typedef struct FFModuleFormatArg
+{
+    const char* desc;
+    const char* name;
+} FFModuleFormatArg;
+
+typedef struct FFModuleFormatArgList
+{
+    FFModuleFormatArg* args;
+    uint32_t count;
+} FFModuleFormatArgList;
+
+#define FF_FORMAT_ARG_LIST(list) { .args = list, .count = sizeof(list) / sizeof(FFModuleFormatArg) }
+
 // Must be the first field of FFModuleOptions
 typedef struct FFModuleBaseInfo
 {
@@ -15,42 +29,22 @@ typedef struct FFModuleBaseInfo
     // This is UB, because `void*` is not compatible with `FF*Options*`.
     // However we can't do it better unless we move to C++, so that `option` becomes a `this` pointer
     // https://stackoverflow.com/questions/559581/casting-a-function-pointer-to-another-type
-    bool (*parseCommandOptions)(void* options, const char* key, const char* value);
+    void (*initOptions)(void* options);
+    void (*destroyOptions)(void* options);
     void (*parseJsonObject)(void* options, struct yyjson_val *module);
     void (*printModule)(void* options);
     void (*generateJsonResult)(void* options, struct yyjson_mut_doc* doc, struct yyjson_mut_val* module);
-    void (*printHelpFormat)(void);
     void (*generateJsonConfig)(void* options, struct yyjson_mut_doc* doc, struct yyjson_mut_val* obj);
+    FFModuleFormatArgList formatArgs;
 } FFModuleBaseInfo;
 
-static inline void ffOptionInitModuleBaseInfo(
-    FFModuleBaseInfo* baseInfo,
-    const char* name,
-    const char* description,
-    void* parseCommandOptions, // bool (*const parseCommandOptions)(void* options, const char* key, const char* value)
-    void* parseJsonObject, // void (*const parseJsonObject)(void* options, yyjson_val *module)
-    void* printModule, // void (*const printModule)(void* options)
-    void* generateJsonResult, // void (*const generateJsonResult)(void* options, yyjson_mut_doc* doc, yyjson_mut_val* obj)
-    void (*printHelpFormat)(void),
-    void* generateJsonConfig // void (*const generateJsonConfig)(void* options, yyjson_mut_doc* doc, yyjson_mut_val* obj)
-)
-{
-    baseInfo->name = name;
-    baseInfo->description = description;
-    baseInfo->parseCommandOptions = (__typeof__(baseInfo->parseCommandOptions)) parseCommandOptions;
-    baseInfo->parseJsonObject = (__typeof__(baseInfo->parseJsonObject)) parseJsonObject;
-    baseInfo->printModule = (__typeof__(baseInfo->printModule)) printModule;
-    baseInfo->generateJsonResult = (__typeof__(baseInfo->generateJsonResult)) generateJsonResult;
-    baseInfo->printHelpFormat = printHelpFormat;
-    baseInfo->generateJsonConfig = (__typeof__(baseInfo->generateJsonConfig)) generateJsonConfig;
-}
-
-typedef enum FFModuleKeyType
+typedef enum __attribute__((__packed__)) FFModuleKeyType
 {
     FF_MODULE_KEY_TYPE_NONE = 0,
     FF_MODULE_KEY_TYPE_STRING = 1 << 0,
     FF_MODULE_KEY_TYPE_ICON = 1 << 1,
     FF_MODULE_KEY_TYPE_BOTH = FF_MODULE_KEY_TYPE_STRING | FF_MODULE_KEY_TYPE_ICON,
+    FF_MODULE_KEY_TYPE_FORCE_UNSIGNED = UINT8_MAX,
 } FFModuleKeyType;
 
 typedef struct FFModuleArgs
@@ -101,3 +95,5 @@ static inline void ffOptionDestroyModuleArg(FFModuleArgs* args)
     ffStrbufDestroy(&args->outputFormat);
     ffStrbufDestroy(&args->outputColor);
 }
+
+enum { FF_OPTION_MAX_SIZE = 1 << 8 }; // Maximum size of a single option value, used for static allocation

@@ -1,10 +1,8 @@
 #pragma once
 
-// This file will be included in "fastfetch.h", do NOT put unnecessary things here
-
 #include "common/option.h"
 
-typedef enum FFColorsSymbol
+typedef enum __attribute__((__packed__)) FFColorsSymbol
 {
     FF_COLORS_SYMBOL_BLOCK,
     FF_COLORS_SYMBOL_BACKGROUND,
@@ -23,10 +21,11 @@ typedef struct FFBlockConfig
 
 typedef struct FFColorsOptions
 {
-    FFModuleBaseInfo moduleInfo;
     FFModuleArgs moduleArgs;
 
     FFColorsSymbol symbol;
     uint32_t paddingLeft;
     FFBlockConfig block;
 } FFColorsOptions;
+
+static_assert(sizeof(FFColorsOptions) <= FF_OPTION_MAX_SIZE, "FFColorsOptions size exceeds maximum allowed size");

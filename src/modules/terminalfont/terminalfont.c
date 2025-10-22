@@ -5,7 +5,6 @@
 #include "util/stringUtils.h"
 
 #define FF_TERMINALFONT_DISPLAY_NAME "Terminal Font"
-#define FF_TERMINALFONT_NUM_FORMAT_ARGS 4
 
 void ffPrintTerminalFont(FFTerminalFontOptions* options)
 {
@@ -33,7 +32,7 @@ void ffPrintTerminalFont(FFTerminalFontOptions* options)
         }
         else
         {
-            FF_PRINT_FORMAT_CHECKED(FF_TERMINALFONT_DISPLAY_NAME, 0, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, FF_TERMINALFONT_NUM_FORMAT_ARGS, ((FFformatarg[]){
+            FF_PRINT_FORMAT_CHECKED(FF_TERMINALFONT_DISPLAY_NAME, 0, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, ((FFformatarg[]){
                 FF_FORMAT_ARG(terminalFont.font.pretty, "combined"),
                 FF_FORMAT_ARG(terminalFont.font.name, "name"),
                 FF_FORMAT_ARG(terminalFont.font.size, "size"),
@@ -47,30 +46,16 @@ void ffPrintTerminalFont(FFTerminalFontOptions* options)
     ffFontDestroy(&terminalFont.fallback);
 }
 
-bool ffParseTerminalFontCommandOptions(FFTerminalFontOptions* options, const char* key, const char* value)
-{
-    const char* subKey = ffOptionTestPrefix(key, FF_TERMINALFONT_MODULE_NAME);
-    if (!subKey) return false;
-    if (ffOptionParseModuleArgs(key, subKey, value, &options->moduleArgs))
-        return true;
-
-    return false;
-}
-
 void ffParseTerminalFontJsonObject(FFTerminalFontOptions* options, yyjson_val* module)
 {
-    yyjson_val *key_, *val;
+    yyjson_val *key, *val;
     size_t idx, max;
-    yyjson_obj_foreach(module, idx, max, key_, val)
+    yyjson_obj_foreach(module, idx, max, key, val)
     {
-        const char* key = yyjson_get_str(key_);
-        if(ffStrEqualsIgnCase(key, "type"))
-            continue;
-
         if (ffJsonConfigParseModuleArgs(key, val, &options->moduleArgs))
             continue;
 
-        ffPrintError(FF_TERMINALFONT_MODULE_NAME, 0, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, "Unknown JSON key %s", key);
+        ffPrintError(FF_TERMINALFONT_MODULE_NAME, 0, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, "Unknown JSON key %s", unsafe_yyjson_get_str(key));
     }
 }
 
@@ -82,7 +67,7 @@ void ffGenerateTerminalFontJsonConfig(FFTerminalFontOptions* options, yyjson_mut
     ffJsonConfigGenerateModuleArgsConfig(doc, module, &defaultOptions.moduleArgs, &options->moduleArgs);
 }
 
-void ffGenerateTerminalFontJsonResult(FF_MAYBE_UNUSED FFTerminalOptions* options, yyjson_mut_doc* doc, yyjson_mut_val* module)
+void ffGenerateTerminalFontJsonResult(FF_MAYBE_UNUSED FFTerminalFontOptions* options, yyjson_mut_doc* doc, yyjson_mut_val* module)
 {
     FFTerminalFontResult result;
     ffFontInit(&result.font);
@@ -121,29 +106,8 @@ void ffGenerateTerminalFontJsonResult(FF_MAYBE_UNUSED FFTerminalOptions* options
     ffFontDestroy(&result.fallback);
 }
 
-void ffPrintTerminalFontHelpFormat(void)
-{
-    FF_PRINT_MODULE_FORMAT_HELP_CHECKED(FF_TERMINALFONT_MODULE_NAME, "{1}", FF_TERMINALFONT_NUM_FORMAT_ARGS, ((const char* []) {
-        "Terminal font combined - combined",
-        "Terminal font name - name",
-        "Terminal font size - size",
-        "Terminal font styles - styles",
-    }));
-}
-
 void ffInitTerminalFontOptions(FFTerminalFontOptions* options)
 {
-    ffOptionInitModuleBaseInfo(
-        &options->moduleInfo,
-        FF_TERMINALFONT_MODULE_NAME,
-        "Print font name and size used by current terminal",
-        ffParseTerminalFontCommandOptions,
-        ffParseTerminalFontJsonObject,
-        ffPrintTerminalFont,
-        ffGenerateTerminalFontJsonResult,
-        ffPrintTerminalFontHelpFormat,
-        ffGenerateTerminalFontJsonConfig
-    );
     ffOptionInitModuleArg(&options->moduleArgs, "");
 }
 
@@ -151,3 +115,20 @@ void ffDestroyTerminalFontOptions(FFTerminalFontOptions* options)
 {
     ffOptionDestroyModuleArg(&options->moduleArgs);
 }
+
+FFModuleBaseInfo ffTerminalFontModuleInfo = {
+    .name = FF_TERMINALFONT_MODULE_NAME,
+    .description = "Print font name and size used by current terminal",
+    .initOptions = (void*) ffInitTerminalFontOptions,
+    .destroyOptions = (void*) ffDestroyTerminalFontOptions,
+    .parseJsonObject = (void*) ffParseTerminalFontJsonObject,
+    .printModule = (void*) ffPrintTerminalFont,
+    .generateJsonResult = (void*) ffGenerateTerminalFontJsonResult,
+    .generateJsonConfig = (void*) ffGenerateTerminalFontJsonConfig,
+    .formatArgs = FF_FORMAT_ARG_LIST(((FFModuleFormatArg[]) {
+        {"Terminal font combined", "combined"},
+        {"Terminal font name", "name"},
+        {"Terminal font size", "size"},
+        {"Terminal font styles", "styles"},
+    })),
+};

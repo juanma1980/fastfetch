@@ -4,8 +4,6 @@
 #include "modules/chassis/chassis.h"
 #include "util/stringUtils.h"
 
-#define FF_CHASSIS_NUM_FORMAT_ARGS 4
-
 void ffPrintChassis(FFChassisOptions* options)
 {
     FFChassisResult result;
@@ -38,7 +36,7 @@ void ffPrintChassis(FFChassisOptions* options)
     }
     else
     {
-        FF_PRINT_FORMAT_CHECKED(FF_CHASSIS_MODULE_NAME, 0, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, FF_CHASSIS_NUM_FORMAT_ARGS, ((FFformatarg[]) {
+        FF_PRINT_FORMAT_CHECKED(FF_CHASSIS_MODULE_NAME, 0, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, ((FFformatarg[]) {
             FF_FORMAT_ARG(result.type, "type"),
             FF_FORMAT_ARG(result.vendor, "vendor"),
             FF_FORMAT_ARG(result.version, "version"),
@@ -53,30 +51,16 @@ exit:
     ffStrbufDestroy(&result.serial);
 }
 
-bool ffParseChassisCommandOptions(FFChassisOptions* options, const char* key, const char* value)
-{
-    const char* subKey = ffOptionTestPrefix(key, FF_CHASSIS_MODULE_NAME);
-    if (!subKey) return false;
-    if (ffOptionParseModuleArgs(key, subKey, value, &options->moduleArgs))
-        return true;
-
-    return false;
-}
-
 void ffParseChassisJsonObject(FFChassisOptions* options, yyjson_val* module)
 {
-    yyjson_val *key_, *val;
+    yyjson_val *key, *val;
     size_t idx, max;
-    yyjson_obj_foreach(module, idx, max, key_, val)
+    yyjson_obj_foreach(module, idx, max, key, val)
     {
-        const char* key = yyjson_get_str(key_);
-        if(ffStrEqualsIgnCase(key, "type"))
-            continue;
-
         if (ffJsonConfigParseModuleArgs(key, val, &options->moduleArgs))
             continue;
 
-        ffPrintError(FF_CHASSIS_MODULE_NAME, 0, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, "Unknown JSON key %s", key);
+        ffPrintError(FF_CHASSIS_MODULE_NAME, 0, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, "Unknown JSON key %s", unsafe_yyjson_get_str(key));
     }
 }
 
@@ -123,29 +107,8 @@ exit:
     ffStrbufDestroy(&result.serial);
 }
 
-void ffPrintChassisHelpFormat(void)
-{
-    FF_PRINT_MODULE_FORMAT_HELP_CHECKED(FF_CHASSIS_MODULE_NAME, "{1}", FF_CHASSIS_NUM_FORMAT_ARGS, ((const char* []) {
-        "chassis type - type",
-        "chassis vendor - vendor",
-        "chassis version - version",
-        "chassis serial number - serial",
-    }));
-}
-
 void ffInitChassisOptions(FFChassisOptions* options)
 {
-    ffOptionInitModuleBaseInfo(
-        &options->moduleInfo,
-        FF_CHASSIS_MODULE_NAME,
-        "Print chassis type (desktop, laptop, etc)",
-        ffParseChassisCommandOptions,
-        ffParseChassisJsonObject,
-        ffPrintChassis,
-        ffGenerateChassisJsonResult,
-        ffPrintChassisHelpFormat,
-        ffGenerateChassisJsonConfig
-    );
     ffOptionInitModuleArg(&options->moduleArgs, "");
 }
 
@@ -153,3 +116,20 @@ void ffDestroyChassisOptions(FFChassisOptions* options)
 {
     ffOptionDestroyModuleArg(&options->moduleArgs);
 }
+
+FFModuleBaseInfo ffChassisModuleInfo = {
+    .name = FF_CHASSIS_MODULE_NAME,
+    .description = "Print chassis type (desktop, laptop, etc)",
+    .initOptions = (void*) ffInitChassisOptions,
+    .destroyOptions = (void*) ffDestroyChassisOptions,
+    .parseJsonObject = (void*) ffParseChassisJsonObject,
+    .printModule = (void*) ffPrintChassis,
+    .generateJsonResult = (void*) ffGenerateChassisJsonResult,
+    .generateJsonConfig = (void*) ffGenerateChassisJsonConfig,
+    .formatArgs = FF_FORMAT_ARG_LIST(((FFModuleFormatArg[]) {
+        {"Chassis type", "type"},
+        {"Chassis vendor", "vendor"},
+        {"Chassis version", "version"},
+        {"Chassis serial number", "serial"},
+    })),
+};

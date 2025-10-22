@@ -33,7 +33,7 @@ void ffStrbufEnsureFree(FFstrbuf* strbuf, uint32_t free)
         return;
 
     uint32_t allocate = strbuf->allocated;
-    if(allocate < 2)
+    if(allocate < FASTFETCH_STRBUF_DEFAULT_ALLOC)
         allocate = FASTFETCH_STRBUF_DEFAULT_ALLOC;
 
     while((strbuf->length + free + 1) > allocate) // + 1 for the null byte
@@ -211,16 +211,12 @@ void ffStrbufPrependNS(FFstrbuf* strbuf, uint32_t length, const char* value)
     strbuf->length += length;
 }
 
-void ffStrbufSetNS(FFstrbuf* strbuf, uint32_t length, const char* value)
+void ffStrbufPrependC(FFstrbuf* strbuf, char c)
 {
-    ffStrbufClear(strbuf);
-    ffStrbufAppendNS(strbuf, length, value);
-}
-
-void ffStrbufSet(FFstrbuf* strbuf, const FFstrbuf* value)
-{
-    ffStrbufClear(strbuf);
-    ffStrbufAppendNS(strbuf, value->length, value->chars);
+    ffStrbufEnsureFree(strbuf, 1);
+    memmove(strbuf->chars + 1, strbuf->chars, strbuf->length + 1); // + 1 for the null byte
+    strbuf->chars[0] = c;
+    strbuf->length += 1;
 }
 
 void ffStrbufTrimLeft(FFstrbuf* strbuf, char c)
@@ -267,6 +263,31 @@ void ffStrbufTrimRight(FFstrbuf* strbuf, char c)
         return;
     }
 
+    strbuf->chars[strbuf->length] = '\0';
+}
+
+void ffStrbufTrimLeftSpace(FFstrbuf* strbuf)
+{
+    if(strbuf->length == 0)
+        return;
+
+    uint32_t index = 0;
+    while(index < strbuf->length && isspace(strbuf->chars[index]))
+        ++index;
+
+    if(index == 0)
+        return;
+
+    if(strbuf->allocated == 0)
+    {
+        //static string
+        strbuf->length -= index;
+        strbuf->chars += index;
+        return;
+    }
+
+    memmove(strbuf->chars, strbuf->chars + index, strbuf->length - index);
+    strbuf->length -= index;
     strbuf->chars[strbuf->length] = '\0';
 }
 
@@ -371,7 +392,8 @@ bool ffStrbufSubstrBefore(FFstrbuf* strbuf, uint32_t index)
     if(strbuf->allocated == 0)
     {
         //static string
-        ffStrbufInitNS(strbuf, strbuf->length, strbuf->chars);
+        if (index < strbuf->length)
+            ffStrbufInitNS(strbuf, index, strbuf->chars);
         return true;
     }
 
@@ -431,6 +453,26 @@ bool ffStrbufSubstrAfterLastC(FFstrbuf* strbuf, char c)
         return false;
 
     ffStrbufSubstrAfter(strbuf, index);
+    return true;
+}
+
+bool ffStrbufSubstr(FFstrbuf* strbuf, uint32_t start, uint32_t end)
+{
+    if (__builtin_expect(start >= end, false))
+    {
+        ffStrbufClear(strbuf);
+        return false;
+    }
+
+    if (__builtin_expect(start == 0, false)) return ffStrbufSubstrBefore(strbuf, end);
+    if (__builtin_expect(end >= strbuf->length, false)) return ffStrbufSubstrAfter(strbuf, start - 1);
+
+    uint32_t len = end - start;
+    ffStrbufEnsureFixedLengthFree(strbuf, len); // In case of static string
+    memmove(strbuf->chars, strbuf->chars + start, len);
+
+    strbuf->length = len;
+    strbuf->chars[len] = '\0';
     return true;
 }
 
@@ -510,4 +552,159 @@ void ffStrbufLowerCase(FFstrbuf* strbuf)
 {
     for (uint32_t i = 0; i < strbuf->length; ++i)
         strbuf->chars[i] = (char) tolower(strbuf->chars[i]);
+}
+
+void ffStrbufInsertNC(FFstrbuf* strbuf, uint32_t index, uint32_t num, char c)
+{
+    if(num == 0) return;
+    if (index >= strbuf->length)
+        index = strbuf->length;
+
+    ffStrbufEnsureFree(strbuf, num);
+    memmove(strbuf->chars + index + num, strbuf->chars + index, strbuf->length - index + 1);
+    memset(&strbuf->chars[index], c, num);
+    strbuf->length += num;
+}
+
+/**
+ * @brief Read a line from a FFstrbuf.
+ *
+ * @details Behaves like getline(3) but reads from a FFstrbuf.
+ *
+ * @param[in,out] lineptr The pointer to a pointer that will be set to the start of the line.
+ *                         Can be NULL for the first call.
+ * @param[in,out] n The pointer to the size of the buffer of lineptr.
+ * @param[in] buffer The buffer to read from. The buffer must not be a string literal.
+ *
+ * @return true if a line has been read, false if the end of the buffer has been reached.
+ */
+bool ffStrbufGetline(char** lineptr, size_t* n, FFstrbuf* buffer)
+{
+    assert(lineptr && n && buffer);
+    assert(buffer->allocated > 0 || (buffer->allocated == 0 && buffer->length == 0));
+    assert(!*lineptr || (*lineptr >= buffer->chars && *lineptr <= buffer->chars + buffer->length));
+
+    const char* pBufferEnd = buffer->chars + buffer->length;
+    if (!*lineptr)
+        *lineptr = buffer->chars;
+    else
+    {
+        *lineptr += *n;
+        if (*lineptr >= pBufferEnd) // non-empty last line
+            return false;
+        **lineptr = '\n';
+        ++*lineptr;
+    }
+    if (*lineptr >= pBufferEnd) // empty last line
+        return false;
+
+    size_t remaining = (size_t) (pBufferEnd - *lineptr);
+    char* ending = memchr(*lineptr, '\n', remaining);
+    if (ending)
+    {
+        *n = (size_t) (ending - *lineptr);
+        *ending = '\0';
+    }
+    else
+        *n = remaining;
+    return true;
+}
+
+/// @brief Restore the end of a line that was modified by ffStrbufGetline.
+/// @warning This function should be called before breaking an ffStrbufGetline loop.
+void ffStrbufGetlineRestore(char** lineptr, size_t* n, FFstrbuf* buffer)
+{
+    assert(buffer && lineptr && n);
+    assert(buffer->allocated > 0 || (buffer->allocated == 0 && buffer->length == 0));
+    assert(!*lineptr || (*lineptr >= buffer->chars && *lineptr <= buffer->chars + buffer->length));
+
+    if (!*lineptr)
+        return;
+
+    *lineptr += *n;
+    if (*lineptr < buffer->chars + buffer->length)
+        **lineptr = '\n';
+}
+
+bool ffStrbufRemoveDupWhitespaces(FFstrbuf* strbuf)
+{
+    if (strbuf->allocated == 0) return false; // Doesn't work with static strings
+
+    bool changed = false;
+    for (uint32_t i = 0; i < strbuf->length; i++)
+    {
+        if (strbuf->chars[i] != ' ') continue;
+
+        i++;
+        uint32_t j = i;
+        for (; j < strbuf->length && strbuf->chars[j] == ' '; j++);
+
+        if (j == i) continue;
+        memmove(&strbuf->chars[i], &strbuf->chars[j], strbuf->length - j + 1);
+        strbuf->length -= j - i;
+        changed = true;
+    }
+
+    return changed;
+}
+
+/// @brief Check if a separated string contains a substring.
+/// @param strbuf The substring to check.
+/// @param compLength The length of the separated string to check.
+/// @param comp The separated string to check.
+/// @param separator The separator character.
+bool ffStrbufMatchSeparatedNS(const FFstrbuf* strbuf, uint32_t compLength, const char* comp, char separator)
+{
+    if (strbuf->length == 0)
+        return true;
+
+    if (compLength == 0)
+        return false;
+
+    for (const char* p = comp; p < comp + compLength;)
+    {
+        const char* colon = memchr(p, separator, compLength);
+        if (colon == NULL)
+            return strcmp(strbuf->chars, p) == 0;
+
+        uint32_t substrLength = (uint32_t) (colon - p);
+        if (strbuf->length == substrLength && memcmp(strbuf->chars, p, substrLength) == 0)
+            return true;
+
+        p = colon + 1;
+    }
+
+    return false;
+}
+
+int ffStrbufAppendUtf32CodePoint(FFstrbuf* strbuf, uint32_t codepoint)
+{
+    if (codepoint <= 0x7F) {
+        ffStrbufAppendC(strbuf, (char)codepoint);
+        return 1;
+    } else if (codepoint <= 0x7FF) {
+        ffStrbufAppendNS(strbuf, 2, (char[]){
+            (char) (0xC0 | (codepoint >> 6)),
+            (char) (0x80 | (codepoint & 0x3F))
+        });
+        return 2;
+    } else if (codepoint <= 0xFFFF) {
+        ffStrbufAppendNS(strbuf, 3, (char[]){
+            (char) (0xE0 | (codepoint >> 12)),
+            (char) (0x80 | ((codepoint >> 6) & 0x3F)),
+            (char) (0x80 | (codepoint & 0x3F))
+        });
+        return 3;
+    } else if (codepoint <= 0x10FFFF) {
+        ffStrbufAppendNS(strbuf, 4, (char[]){
+            (char) (0xF0 | (codepoint >> 18)),
+            (char) (0x80 | ((codepoint >> 12) & 0x3F)),
+            (char) (0x80 | ((codepoint >> 6) & 0x3F)),
+            (char) (0x80 | (codepoint & 0x3F))
+        });
+        return 4;
+    }
+
+    ffStrbufAppendS(strbuf, "�"); // U+FFFD REPLACEMENT CHARACTER
+    return 1;
 }

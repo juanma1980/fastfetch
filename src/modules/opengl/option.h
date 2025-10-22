@@ -1,21 +1,19 @@
 #pragma once
 
-// This file will be included in "fastfetch.h", do NOT put unnecessary things here
-
 #include "common/option.h"
 
-typedef enum FFOpenGLLibrary
+typedef enum __attribute__((__packed__)) FFOpenGLLibrary
 {
     FF_OPENGL_LIBRARY_AUTO,
     FF_OPENGL_LIBRARY_EGL,
     FF_OPENGL_LIBRARY_GLX,
-    FF_OPENGL_LIBRARY_OSMESA
 } FFOpenGLLibrary;
 
 typedef struct FFOpenGLOptions
 {
-    FFModuleBaseInfo moduleInfo;
     FFModuleArgs moduleArgs;
 
     FFOpenGLLibrary library;
 } FFOpenGLOptions;
+
+static_assert(sizeof(FFOpenGLOptions) <= FF_OPTION_MAX_SIZE, "FFOpenGLOptions size exceeds maximum allowed size");

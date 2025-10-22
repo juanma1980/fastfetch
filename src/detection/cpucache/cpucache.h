@@ -1,8 +1,9 @@
 #pragma once
 
 #include "fastfetch.h"
+#include "modules/cpucache/option.h"
 
-typedef enum FFCPUCacheType
+typedef enum __attribute__((__packed__)) FFCPUCacheType
 {
     FF_CPU_CACHE_TYPE_UNIFIED = 0,
     FF_CPU_CACHE_TYPE_INSTRUCTION = 1,

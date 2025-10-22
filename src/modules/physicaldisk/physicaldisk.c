@@ -1,13 +1,12 @@
 #include "common/printing.h"
 #include "common/jsonconfig.h"
-#include "common/parsing.h"
 #include "common/temps.h"
+#include "common/size.h"
 #include "detection/physicaldisk/physicaldisk.h"
 #include "modules/physicaldisk/physicaldisk.h"
 #include "util/stringUtils.h"
 
 #define FF_PHYSICALDISK_DISPLAY_NAME "Physical Disk"
-#define FF_PHYSICALDISK_NUM_FORMAT_ARGS 10
 
 static int sortDevices(const FFPhysicalDiskResult* left, const FFPhysicalDiskResult* right)
 {
@@ -23,7 +22,7 @@ static void formatKey(const FFPhysicalDiskOptions* options, FFPhysicalDiskResult
     else
     {
         ffStrbufClear(key);
-        FF_PARSE_FORMAT_STRING_CHECKED(key, &options->moduleArgs.key, 4, ((FFformatarg[]){
+        FF_PARSE_FORMAT_STRING_CHECKED(key, &options->moduleArgs.key, ((FFformatarg[]){
             FF_FORMAT_ARG(index, "index"),
             FF_FORMAT_ARG(dev->name, "name"),
             FF_FORMAT_ARG(dev->devPath, "dev-path"),
@@ -53,7 +52,7 @@ void ffPrintPhysicalDisk(FFPhysicalDiskOptions* options)
     {
         formatKey(options, dev, result.length == 1 ? 0 : index + 1, &key);
         ffStrbufClear(&buffer);
-        ffParseSize(dev->size, &buffer);
+        ffSizeAppendNum(dev->size, &buffer);
 
         const char* physicalType = dev->type & FF_PHYSICALDISK_TYPE_HDD
             ? "HDD"
@@ -108,13 +107,13 @@ void ffPrintPhysicalDisk(FFPhysicalDiskOptions* options)
             ffTempsAppendNum(dev->temperature, &tempStr, options->tempConfig, &options->moduleArgs);
             if (dev->type & FF_PHYSICALDISK_TYPE_READWRITE)
                 readOnlyType = "Read-write";
-            FF_PRINT_FORMAT_CHECKED(key.chars, 0, &options->moduleArgs, FF_PRINT_TYPE_NO_CUSTOM_KEY, FF_PHYSICALDISK_NUM_FORMAT_ARGS, ((FFformatarg[]){
+            FF_PRINT_FORMAT_CHECKED(key.chars, 0, &options->moduleArgs, FF_PRINT_TYPE_NO_CUSTOM_KEY, ((FFformatarg[]){
                 FF_FORMAT_ARG(buffer, "size"),
                 FF_FORMAT_ARG(dev->name, "name"),
                 FF_FORMAT_ARG(dev->interconnect, "interconnect"),
-                FF_FORMAT_ARG(physicalType, "type"),
                 FF_FORMAT_ARG(dev->devPath, "dev-path"),
                 FF_FORMAT_ARG(dev->serial, "serial"),
+                FF_FORMAT_ARG(physicalType, "physical-type"),
                 FF_FORMAT_ARG(removableType, "removable-type"),
                 FF_FORMAT_ARG(readOnlyType, "readonly-type"),
                 FF_FORMAT_ARG(dev->revision, "revision"),
@@ -134,48 +133,25 @@ void ffPrintPhysicalDisk(FFPhysicalDiskOptions* options)
     }
 }
 
-bool ffParsePhysicalDiskCommandOptions(FFPhysicalDiskOptions* options, const char* key, const char* value)
-{
-    const char* subKey = ffOptionTestPrefix(key, FF_PHYSICALDISK_MODULE_NAME);
-    if (!subKey) return false;
-    if (ffOptionParseModuleArgs(key, subKey, value, &options->moduleArgs))
-        return true;
-
-    if (ffStrEqualsIgnCase(subKey, "name-prefix"))
-    {
-        ffOptionParseString(key, value, &options->namePrefix);
-        return true;
-    }
-
-    if (ffTempsParseCommandOptions(key, subKey, value, &options->temp, &options->tempConfig))
-        return true;
-
-    return false;
-}
-
 void ffParsePhysicalDiskJsonObject(FFPhysicalDiskOptions* options, yyjson_val* module)
 {
-    yyjson_val *key_, *val;
+    yyjson_val *key, *val;
     size_t idx, max;
-    yyjson_obj_foreach(module, idx, max, key_, val)
+    yyjson_obj_foreach(module, idx, max, key, val)
     {
-        const char* key = yyjson_get_str(key_);
-        if(ffStrEqualsIgnCase(key, "type"))
-            continue;
-
         if (ffJsonConfigParseModuleArgs(key, val, &options->moduleArgs))
             continue;
 
-        if (ffStrEqualsIgnCase(key, "namePrefix"))
+        if (unsafe_yyjson_equals_str(key, "namePrefix"))
         {
-            ffStrbufSetS(&options->namePrefix, yyjson_get_str(val));
+            ffStrbufSetJsonVal(&options->namePrefix, val);
             continue;
         }
 
         if (ffTempsParseJsonObject(key, val, &options->temp, &options->tempConfig))
             continue;
 
-        ffPrintError(FF_PHYSICALDISK_MODULE_NAME, 0, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, "Unknown JSON key %s", key);
+        ffPrintError(FF_PHYSICALDISK_MODULE_NAME, 0, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, "Unknown JSON key %s", unsafe_yyjson_get_str(key));
     }
 }
 
@@ -250,40 +226,13 @@ void ffGeneratePhysicalDiskJsonResult(FFPhysicalDiskOptions* options, yyjson_mut
     }
 }
 
-void ffPrintPhysicalDiskHelpFormat(void)
-{
-    FF_PRINT_MODULE_FORMAT_HELP_CHECKED(FF_PHYSICALDISK_MODULE_NAME, "{1} [{6}, {7}, {8}]", FF_PHYSICALDISK_NUM_FORMAT_ARGS, ((const char* []) {
-        "Device size (formatted) - ",
-        "Device name",
-        "Device interconnect type",
-        "Device raw file path",
-        "Serial number",
-        "Device kind (SSD or HDD)",
-        "Device kind (Removable or Fixed)",
-        "Device kind (Read-only or Read-write)",
-        "Product revision",
-        "Device temperature (formatted)",
-    }));
-}
-
 void ffInitPhysicalDiskOptions(FFPhysicalDiskOptions* options)
 {
-    ffOptionInitModuleBaseInfo(
-        &options->moduleInfo,
-        FF_PHYSICALDISK_MODULE_NAME,
-        "Print physical disk information",
-        ffParsePhysicalDiskCommandOptions,
-        ffParsePhysicalDiskJsonObject,
-        ffPrintPhysicalDisk,
-        ffGeneratePhysicalDiskJsonResult,
-        ffPrintPhysicalDiskHelpFormat,
-        ffGeneratePhysicalDiskJsonConfig
-    );
     ffOptionInitModuleArg(&options->moduleArgs, "󰋊");
 
     ffStrbufInit(&options->namePrefix);
     options->temp = false;
-    options->tempConfig = (FFColorRangeConfig) { 40, 60 };
+    options->tempConfig = (FFColorRangeConfig) { 50, 70 };
 }
 
 void ffDestroyPhysicalDiskOptions(FFPhysicalDiskOptions* options)
@@ -291,3 +240,26 @@ void ffDestroyPhysicalDiskOptions(FFPhysicalDiskOptions* options)
     ffOptionDestroyModuleArg(&options->moduleArgs);
     ffStrbufDestroy(&options->namePrefix);
 }
+
+FFModuleBaseInfo ffPhysicalDiskModuleInfo = {
+    .name = FF_PHYSICALDISK_MODULE_NAME,
+    .description = "Print physical disk information",
+    .initOptions = (void*) ffInitPhysicalDiskOptions,
+    .destroyOptions = (void*) ffDestroyPhysicalDiskOptions,
+    .parseJsonObject = (void*) ffParsePhysicalDiskJsonObject,
+    .printModule = (void*) ffPrintPhysicalDisk,
+    .generateJsonResult = (void*) ffGeneratePhysicalDiskJsonResult,
+    .generateJsonConfig = (void*) ffGeneratePhysicalDiskJsonConfig,
+    .formatArgs = FF_FORMAT_ARG_LIST(((FFModuleFormatArg[]) {
+        {"Device size (formatted)", "size"},
+        {"Device name", "name"},
+        {"Device interconnect type", "interconnect"},
+        {"Device raw file path", "dev-path"},
+        {"Serial number", "serial"},
+        {"Device kind (SSD or HDD)", "physical-type"},
+        {"Device kind (Removable or Fixed)", "removable-type"},
+        {"Device kind (Read-only or Read-write)", "readonly-type"},
+        {"Product revision", "revision"},
+        {"Device temperature (formatted)", "temperature"},
+    }))
+};

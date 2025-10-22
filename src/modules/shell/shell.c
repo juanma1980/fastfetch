@@ -4,8 +4,6 @@
 #include "modules/shell/shell.h"
 #include "util/stringUtils.h"
 
-#define FF_SHELL_NUM_FORMAT_ARGS 8
-
 void ffPrintShell(FFShellOptions* options)
 {
     const FFShellResult* result = ffDetectShell();
@@ -31,7 +29,7 @@ void ffPrintShell(FFShellOptions* options)
     }
     else
     {
-        FF_PRINT_FORMAT_CHECKED(FF_SHELL_MODULE_NAME, 0, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, FF_SHELL_NUM_FORMAT_ARGS, ((FFformatarg[]) {
+        FF_PRINT_FORMAT_CHECKED(FF_SHELL_MODULE_NAME, 0, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, ((FFformatarg[]) {
             FF_FORMAT_ARG(result->processName, "process-name"),
             FF_FORMAT_ARG(result->exe, "exe"),
             FF_FORMAT_ARG(result->exeName, "exe-name"),
@@ -44,30 +42,16 @@ void ffPrintShell(FFShellOptions* options)
     }
 }
 
-bool ffParseShellCommandOptions(FFShellOptions* options, const char* key, const char* value)
-{
-    const char* subKey = ffOptionTestPrefix(key, FF_SHELL_MODULE_NAME);
-    if (!subKey) return false;
-    if (ffOptionParseModuleArgs(key, subKey, value, &options->moduleArgs))
-        return true;
-
-    return false;
-}
-
 void ffParseShellJsonObject(FFShellOptions* options, yyjson_val* module)
 {
-    yyjson_val *key_, *val;
+    yyjson_val *key, *val;
     size_t idx, max;
-    yyjson_obj_foreach(module, idx, max, key_, val)
+    yyjson_obj_foreach(module, idx, max, key, val)
     {
-        const char* key = yyjson_get_str(key_);
-        if(ffStrEqualsIgnCase(key, "type"))
-            continue;
-
         if (ffJsonConfigParseModuleArgs(key, val, &options->moduleArgs))
             continue;
 
-        ffPrintError(FF_SHELL_MODULE_NAME, 0, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, "Unknown JSON key %s", key);
+        ffPrintError(FF_SHELL_MODULE_NAME, 0, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, "Unknown JSON key %s", unsafe_yyjson_get_str(key));
     }
 }
 
@@ -104,33 +88,8 @@ void ffGenerateShellJsonResult(FF_MAYBE_UNUSED FFShellOptions* options, yyjson_m
         yyjson_mut_obj_add_null(doc, obj, "tty");
 }
 
-void ffPrintShellHelpFormat(void)
-{
-    FF_PRINT_MODULE_FORMAT_HELP_CHECKED(FF_SHELL_MODULE_NAME, "{3} {4}", FF_SHELL_NUM_FORMAT_ARGS, ((const char* []) {
-        "Shell process name - process-name",
-        "The first argument of the command line when running the shell - exe",
-        "Shell base name of arg0 - exe-name",
-        "Shell version - version",
-        "Shell pid - pid",
-        "Shell pretty name - pretty-name",
-        "Shell full exe path - exe-path",
-        "Shell tty used - tty",
-    }));
-}
-
 void ffInitShellOptions(FFShellOptions* options)
 {
-    ffOptionInitModuleBaseInfo(
-        &options->moduleInfo,
-        FF_SHELL_MODULE_NAME,
-        "Print current shell name and version",
-        ffParseShellCommandOptions,
-        ffParseShellJsonObject,
-        ffPrintShell,
-        ffGenerateShellJsonResult,
-        ffPrintShellHelpFormat,
-        ffGenerateShellJsonConfig
-    );
     ffOptionInitModuleArg(&options->moduleArgs, "");
 }
 
@@ -138,3 +97,24 @@ void ffDestroyShellOptions(FFShellOptions* options)
 {
     ffOptionDestroyModuleArg(&options->moduleArgs);
 }
+
+FFModuleBaseInfo ffShellModuleInfo = {
+    .name = FF_SHELL_MODULE_NAME,
+    .description = "Print current shell name and version",
+    .initOptions = (void*) ffInitShellOptions,
+    .destroyOptions = (void*) ffDestroyShellOptions,
+    .parseJsonObject = (void*) ffParseShellJsonObject,
+    .printModule = (void*) ffPrintShell,
+    .generateJsonResult = (void*) ffGenerateShellJsonResult,
+    .generateJsonConfig = (void*) ffGenerateShellJsonConfig,
+    .formatArgs = FF_FORMAT_ARG_LIST(((FFModuleFormatArg[]) {
+        {"Shell process name", "process-name"},
+        {"The first argument of the command line when running the shell", "exe"},
+        {"Shell base name of arg0", "exe-name"},
+        {"Shell version", "version"},
+        {"Shell pid", "pid"},
+        {"Shell pretty name", "pretty-name"},
+        {"Shell full exe path", "exe-path"},
+        {"Shell tty used", "tty"},
+    }))
+};

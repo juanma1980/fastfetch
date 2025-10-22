@@ -1,4 +1,7 @@
 #include "physicaldisk.h"
+
+#if __has_include(<libgeom.h>)
+
 #include "util/stringUtils.h"
 
 #include <devstat.h>
@@ -62,6 +65,7 @@ const char* ffDetectPhysicalDisk(FFlist* result, FFPhysicalDiskOptions* options)
         FFPhysicalDiskResult* device = (FFPhysicalDiskResult*) ffListAdd(result);
         ffStrbufInitF(&device->devPath, "/dev/%s", provider->lg_name);
         ffStrbufInitMove(&device->serial, &identifier);
+        ffStrbufTrimSpace(&device->serial);
         ffStrbufInit(&device->revision);
         ffStrbufInit(&device->interconnect);
         switch (snapIter->device_type & DEVSTAT_TYPE_IF_MASK)
@@ -92,3 +96,9 @@ const char* ffDetectPhysicalDisk(FFlist* result, FFPhysicalDiskOptions* options)
 
     return NULL;
 }
+#else
+const char* ffDetectPhysicalDisk(FFlist* result, FFPhysicalDiskOptions* options)
+{
+    return "Fastfetch was compiled without libgeom support";
+}
+#endif

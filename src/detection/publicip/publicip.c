@@ -1,11 +1,11 @@
 #include "publicip.h"
-#include "common/networking.h"
+#include "common/networking/networking.h"
 
 #define FF_UNITIALIZED ((const char*)(uintptr_t) -1)
 static FFNetworkingState states[2];
 static const char* statuses[2] = { FF_UNITIALIZED, FF_UNITIALIZED };
 
-void ffPreparePublicIp(FFPublicIpOptions* options)
+void ffPreparePublicIp(FFPublicIPOptions* options)
 {
     FFNetworkingState* state = &states[options->ipv6];
     const char** status = &statuses[options->ipv6];
@@ -19,7 +19,11 @@ void ffPreparePublicIp(FFPublicIpOptions* options)
     state->ipv6 = options->ipv6;
 
     if (options->url.length == 0)
+    {
+        state->compression = true;
+        state->tfo = true;
         *status = ffNetworkingSendHttpRequest(state, options->ipv6 ? "v6.ipinfo.io" : "ipinfo.io", "/json", NULL);
+    }
     else
     {
         FF_STRBUF_AUTO_DESTROY host = ffStrbufCreateCopy(&options->url);
@@ -54,7 +58,7 @@ static inline void wrapYyjsonFree(yyjson_doc** doc)
         yyjson_doc_free(*doc);
 }
 
-const char* ffDetectPublicIp(FFPublicIpOptions* options, FFPublicIpResult* result)
+const char* ffDetectPublicIp(FFPublicIPOptions* options, FFPublicIpResult* result)
 {
     FFNetworkingState* state = &states[options->ipv6];
     const char** status = &statuses[options->ipv6];
@@ -80,7 +84,7 @@ const char* ffDetectPublicIp(FFPublicIpOptions* options, FFPublicIpResult* resul
         if (doc)
         {
             yyjson_val* root = yyjson_doc_get_root(doc);
-            ffStrbufAppendS(&result->ip, yyjson_get_str(yyjson_obj_get(root, "ip")));
+            ffStrbufAppendJsonVal(&result->ip, yyjson_obj_get(root, "ip"));
             ffStrbufDestroy(&result->location);
             ffStrbufInitF(&result->location, "%s, %s", yyjson_get_str(yyjson_obj_get(root, "city")), yyjson_get_str(yyjson_obj_get(root, "country")));
             return NULL;

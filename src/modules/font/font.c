@@ -4,8 +4,6 @@
 #include "modules/font/font.h"
 #include "util/stringUtils.h"
 
-#define FF_FONT_NUM_FORMAT_ARGS (FF_DETECT_FONT_NUM_FONTS + 1)
-
 void ffPrintFont(FFFontOptions* options)
 {
     FFFontResult font;
@@ -28,7 +26,7 @@ void ffPrintFont(FFFontOptions* options)
         }
         else
         {
-            FF_PRINT_FORMAT_CHECKED(FF_FONT_MODULE_NAME, 0, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, FF_FONT_NUM_FORMAT_ARGS, ((FFformatarg[]) {
+            FF_PRINT_FORMAT_CHECKED(FF_FONT_MODULE_NAME, 0, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, ((FFformatarg[]) {
                 FF_FORMAT_ARG(font.fonts[0], "font1"),
                 FF_FORMAT_ARG(font.fonts[1], "font2"),
                 FF_FORMAT_ARG(font.fonts[2], "font3"),
@@ -43,30 +41,16 @@ void ffPrintFont(FFFontOptions* options)
         ffStrbufDestroy(&font.fonts[i]);
 }
 
-bool ffParseFontCommandOptions(FFFontOptions* options, const char* key, const char* value)
-{
-    const char* subKey = ffOptionTestPrefix(key, FF_FONT_MODULE_NAME);
-    if (!subKey) return false;
-    if (ffOptionParseModuleArgs(key, subKey, value, &options->moduleArgs))
-        return true;
-
-    return false;
-}
-
 void ffParseFontJsonObject(FFFontOptions* options, yyjson_val* module)
 {
-    yyjson_val *key_, *val;
+    yyjson_val *key, *val;
     size_t idx, max;
-    yyjson_obj_foreach(module, idx, max, key_, val)
+    yyjson_obj_foreach(module, idx, max, key, val)
     {
-        const char* key = yyjson_get_str(key_);
-        if(ffStrEqualsIgnCase(key, "type"))
-            continue;
-
         if (ffJsonConfigParseModuleArgs(key, val, &options->moduleArgs))
             continue;
 
-        ffPrintError(FF_FONT_MODULE_NAME, 0, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, "Unknown JSON key %s", key);
+        ffPrintError(FF_FONT_MODULE_NAME, 0, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, "Unknown JSON key %s", unsafe_yyjson_get_str(key));
     }
 }
 
@@ -104,30 +88,8 @@ void ffGenerateFontJsonResult(FF_MAYBE_UNUSED FFFontOptions* options, yyjson_mut
         ffStrbufDestroy(&font.fonts[i]);
 }
 
-void ffPrintFontHelpFormat(void)
-{
-    FF_PRINT_MODULE_FORMAT_HELP_CHECKED(FF_FONT_MODULE_NAME, "{5}", FF_FONT_NUM_FORMAT_ARGS, ((const char* []) {
-        "Font 1 - font1",
-        "Font 2 - font2",
-        "Font 3 - font3",
-        "Font 4 - font4",
-        "Combined fonts for display - combined"
-    }));
-}
-
 void ffInitFontOptions(FFFontOptions* options)
 {
-    ffOptionInitModuleBaseInfo(
-        &options->moduleInfo,
-        FF_FONT_MODULE_NAME,
-        "Print system font name",
-        ffParseFontCommandOptions,
-        ffParseFontJsonObject,
-        ffPrintFont,
-        ffGenerateFontJsonResult,
-        ffPrintFontHelpFormat,
-        ffGenerateFontJsonConfig
-    );
     ffOptionInitModuleArg(&options->moduleArgs, "");
 }
 
@@ -135,3 +97,21 @@ void ffDestroyFontOptions(FFFontOptions* options)
 {
     ffOptionDestroyModuleArg(&options->moduleArgs);
 }
+
+FFModuleBaseInfo ffFontModuleInfo = {
+    .name = FF_FONT_MODULE_NAME,
+    .description = "Print system font names",
+    .initOptions = (void*) ffInitFontOptions,
+    .destroyOptions = (void*) ffDestroyFontOptions,
+    .parseJsonObject = (void*) ffParseFontJsonObject,
+    .printModule = (void*) ffPrintFont,
+    .generateJsonResult = (void*) ffGenerateFontJsonResult,
+    .generateJsonConfig = (void*) ffGenerateFontJsonConfig,
+    .formatArgs = FF_FORMAT_ARG_LIST(((FFModuleFormatArg[]) {
+        {"Font 1", "font1"},
+        {"Font 2", "font2"},
+        {"Font 3", "font3"},
+        {"Font 4", "font4"},
+        {"Combined fonts for display", "combined"},
+    }))
+};

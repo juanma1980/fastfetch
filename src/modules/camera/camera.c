@@ -5,8 +5,6 @@
 #include "modules/camera/camera.h"
 #include "util/stringUtils.h"
 
-#define FF_CAMERA_NUM_FORMAT_ARGS 6
-
 static void printDevice(FFCameraOptions* options, const FFCameraResult* device, uint8_t index)
 {
     if(options->moduleArgs.outputFormat.length == 0)
@@ -27,7 +25,7 @@ static void printDevice(FFCameraOptions* options, const FFCameraResult* device, 
     }
     else
     {
-        FF_PRINT_FORMAT_CHECKED(FF_CAMERA_MODULE_NAME, index, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, FF_CAMERA_NUM_FORMAT_ARGS, (((FFformatarg[]) {
+        FF_PRINT_FORMAT_CHECKED(FF_CAMERA_MODULE_NAME, index, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, (((FFformatarg[]) {
             FF_FORMAT_ARG(device->name, "name"),
             FF_FORMAT_ARG(device->vendor, "vendor"),
             FF_FORMAT_ARG(device->colorspace, "colorspace"),
@@ -69,30 +67,16 @@ void ffPrintCamera(FFCameraOptions* options)
     }
 }
 
-bool ffParseCameraCommandOptions(FFCameraOptions* options, const char* key, const char* value)
-{
-    const char* subKey = ffOptionTestPrefix(key, FF_CAMERA_MODULE_NAME);
-    if (!subKey) return false;
-    if (ffOptionParseModuleArgs(key, subKey, value, &options->moduleArgs))
-        return true;
-
-    return false;
-}
-
 void ffParseCameraJsonObject(FFCameraOptions* options, yyjson_val* module)
 {
-    yyjson_val *key_, *val;
+    yyjson_val *key, *val;
     size_t idx, max;
-    yyjson_obj_foreach(module, idx, max, key_, val)
+    yyjson_obj_foreach(module, idx, max, key, val)
     {
-        const char* key = yyjson_get_str(key_);
-        if(ffStrEqualsIgnCase(key, "type"))
-            continue;
-
         if (ffJsonConfigParseModuleArgs(key, val, &options->moduleArgs))
             continue;
 
-        ffPrintError(FF_CAMERA_MODULE_NAME, 0, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, "Unknown JSON key %s", key);
+        ffPrintError(FF_CAMERA_MODULE_NAME, 0, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, "Unknown JSON key %s", unsafe_yyjson_get_str(key));
     }
 }
 
@@ -136,31 +120,8 @@ void ffGenerateCameraJsonResult(FF_MAYBE_UNUSED FFCameraOptions* options, yyjson
     }
 }
 
-void ffPrintCameraHelpFormat(void)
-{
-    FF_PRINT_MODULE_FORMAT_HELP_CHECKED(FF_CAMERA_MODULE_NAME, "{1} ({4}px x {5}px)", FF_CAMERA_NUM_FORMAT_ARGS, ((const char* []) {
-        "Device name - name",
-        "Vendor - vendor",
-        "Color space - colorspace",
-        "Identifier - id",
-        "Width (in px) - width",
-        "Height (in px) - height",
-    }));
-}
-
 void ffInitCameraOptions(FFCameraOptions* options)
 {
-    ffOptionInitModuleBaseInfo(
-        &options->moduleInfo,
-        FF_CAMERA_MODULE_NAME,
-        "Print available cameras",
-        ffParseCameraCommandOptions,
-        ffParseCameraJsonObject,
-        ffPrintCamera,
-        ffGenerateCameraJsonResult,
-        ffPrintCameraHelpFormat,
-        ffGenerateCameraJsonConfig
-    );
     ffOptionInitModuleArg(&options->moduleArgs, "󰄀");
 }
 
@@ -168,3 +129,22 @@ void ffDestroyCameraOptions(FFCameraOptions* options)
 {
     ffOptionDestroyModuleArg(&options->moduleArgs);
 }
+
+FFModuleBaseInfo ffCameraModuleInfo = {
+    .name = FF_CAMERA_MODULE_NAME,
+    .description = "Print available cameras",
+    .initOptions = (void*) ffInitCameraOptions,
+    .destroyOptions = (void*) ffDestroyCameraOptions,
+    .parseJsonObject = (void*) ffParseCameraJsonObject,
+    .printModule = (void*) ffPrintCamera,
+    .generateJsonResult = (void*) ffGenerateCameraJsonResult,
+    .generateJsonConfig = (void*) ffGenerateCameraJsonConfig,
+    .formatArgs = FF_FORMAT_ARG_LIST(((FFModuleFormatArg[]) {
+        {"Device name", "name"},
+        {"Vendor", "vendor"},
+        {"Color space", "colorspace"},
+        {"Identifier", "id"},
+        {"Width (in px)", "width"},
+        {"Height (in px)", "height"},
+    }))
+};

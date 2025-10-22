@@ -60,9 +60,11 @@ logoType:
                 { "file-raw", FF_LOGO_TYPE_FILE_RAW },
                 { "data", FF_LOGO_TYPE_DATA },
                 { "data-raw", FF_LOGO_TYPE_DATA_RAW },
+                { "command-raw", FF_LOGO_TYPE_COMMAND_RAW },
                 { "sixel", FF_LOGO_TYPE_IMAGE_SIXEL },
                 { "kitty", FF_LOGO_TYPE_IMAGE_KITTY },
                 { "kitty-direct", FF_LOGO_TYPE_IMAGE_KITTY_DIRECT },
+                { "kitty-icat", FF_LOGO_TYPE_IMAGE_KITTY_ICAT },
                 { "iterm", FF_LOGO_TYPE_IMAGE_ITERM },
                 { "chafa", FF_LOGO_TYPE_IMAGE_CHAFA },
                 { "raw", FF_LOGO_TYPE_IMAGE_RAW },
@@ -172,6 +174,11 @@ logoType:
         ffOptionParseString(key, value, &options->source);
         options->type = FF_LOGO_TYPE_IMAGE_KITTY_DIRECT;
     }
+    else if(ffStrEqualsIgnCase(key, "--kitty-icat"))
+    {
+        ffOptionParseString(key, value, &options->source);
+        options->type = FF_LOGO_TYPE_IMAGE_KITTY_ICAT;
+    }
     else if(ffStrEqualsIgnCase(key, "--iterm"))
     {
         ffOptionParseString(key, value, &options->source);
@@ -256,8 +263,7 @@ const char* ffOptionsParseLogoJsonConfig(FFOptionsLogo* options, yyjson_val* roo
 
     if (yyjson_is_str(object))
     {
-        const char* value = yyjson_get_str(object);
-        ffStrbufSetS(&options->source, value);
+        ffStrbufSetJsonVal(&options->source, object);
         return NULL;
     }
 
@@ -280,9 +286,11 @@ const char* ffOptionsParseLogoJsonConfig(FFOptionsLogo* options, yyjson_val* roo
                 { "file-raw", FF_LOGO_TYPE_FILE_RAW },
                 { "data", FF_LOGO_TYPE_DATA },
                 { "data-raw", FF_LOGO_TYPE_DATA_RAW },
+                { "command-raw", FF_LOGO_TYPE_COMMAND_RAW },
                 { "sixel", FF_LOGO_TYPE_IMAGE_SIXEL },
                 { "kitty", FF_LOGO_TYPE_IMAGE_KITTY },
                 { "kitty-direct", FF_LOGO_TYPE_IMAGE_KITTY_DIRECT },
+                { "kitty-icat", FF_LOGO_TYPE_IMAGE_KITTY_ICAT },
                 { "iterm", FF_LOGO_TYPE_IMAGE_ITERM },
                 { "chafa", FF_LOGO_TYPE_IMAGE_CHAFA },
                 { "raw", FF_LOGO_TYPE_IMAGE_RAW },
@@ -296,7 +304,7 @@ const char* ffOptionsParseLogoJsonConfig(FFOptionsLogo* options, yyjson_val* roo
         }
         else if (ffStrEqualsIgnCase(key, "source"))
         {
-            ffStrbufSetS(&options->source, yyjson_get_str(val));
+            ffStrbufSetJsonVal(&options->source, val);
             continue;
         }
         else if (ffStrEqualsIgnCase(key, "color"))
@@ -394,7 +402,7 @@ const char* ffOptionsParseLogoJsonConfig(FFOptionsLogo* options, yyjson_val* roo
 
             yyjson_val* symbols = yyjson_obj_get(val, "symbols");
             if (symbols)
-                ffStrbufAppendS(&options->chafaSymbols, yyjson_get_str(symbols));
+                ffStrbufSetJsonVal(&options->chafaSymbols, symbols);
 
             yyjson_val* canvasMode = yyjson_obj_get(val, "canvasMode");
             if (canvasMode)
@@ -484,6 +492,9 @@ void ffOptionsGenerateLogoJsonConfig(FFOptionsLogo* options, yyjson_mut_doc* doc
                 break;
             case FF_LOGO_TYPE_DATA_RAW:
                 yyjson_mut_obj_add_str(doc, obj, "type", "data-raw");
+                break;
+            case FF_LOGO_TYPE_COMMAND_RAW:
+                yyjson_mut_obj_add_str(doc, obj, "type", "command-raw");
                 break;
             case FF_LOGO_TYPE_IMAGE_SIXEL:
                 yyjson_mut_obj_add_str(doc, obj, "type", "sixel");

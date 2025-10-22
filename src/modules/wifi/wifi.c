@@ -4,8 +4,6 @@
 #include "modules/wifi/wifi.h"
 #include "util/stringUtils.h"
 
-#define FF_WIFI_NUM_FORMAT_ARGS 11
-
 void ffPrintWifi(FFWifiOptions* options)
 {
     FF_LIST_AUTO_DESTROY result = ffListCreate(sizeof(FFWifiResult));
@@ -22,10 +20,33 @@ void ffPrintWifi(FFWifiOptions* options)
         return;
     }
 
+    FFPercentageTypeFlags percentType = options->percent.type == 0 ? instance.config.display.percentType : options->percent.type;
+
     for(uint32_t index = 0; index < result.length; ++index)
     {
-        FFWifiResult* item = (FFWifiResult*)ffListGet(&result, index);
+        FFWifiResult* item = FF_LIST_GET(FFWifiResult, result, index);
         uint8_t moduleIndex = result.length == 1 ? 0 : (uint8_t)(index + 1);
+
+        // https://en.wikipedia.org/wiki/List_of_WLAN_channels
+        char bandStr[8];
+        if (item->conn.frequency > 58000)
+            strcpy(bandStr, "60");
+        if (item->conn.frequency > 40000)
+            strcpy(bandStr, "45");
+        else if (item->conn.frequency > 5900)
+            strcpy(bandStr, "6");
+        else if (item->conn.frequency > 5100)
+            strcpy(bandStr, "5");
+        else if (item->conn.frequency > 4900)
+            strcpy(bandStr, "4.9");
+        else if (item->conn.frequency > 3600)
+            strcpy(bandStr, "3.65");
+        else if (item->conn.frequency > 2000)
+            strcpy(bandStr, "2.4");
+        else if (item->conn.frequency > 800)
+            strcpy(bandStr, "0.9");
+        else
+            bandStr[0] = '\0';
 
         if(options->moduleArgs.outputFormat.length == 0)
         {
@@ -36,14 +57,14 @@ void ffPrintWifi(FFWifiOptions* options)
             {
                 if(item->conn.signalQuality == item->conn.signalQuality)
                 {
-                    if(instance.config.display.percentType & FF_PERCENTAGE_TYPE_BAR_BIT)
+                    if(percentType & FF_PERCENTAGE_TYPE_BAR_BIT)
                     {
                         ffPercentAppendBar(&buffer, item->conn.signalQuality, options->percent, &options->moduleArgs);
                         ffStrbufAppendC(&buffer, ' ');
                     }
                 }
 
-                if (!(instance.config.display.percentType & FF_PERCENTAGE_TYPE_HIDE_OTHERS_BIT))
+                if (!(percentType & FF_PERCENTAGE_TYPE_HIDE_OTHERS_BIT))
                 {
                     ffStrbufAppend(&buffer, &item->conn.ssid);
 
@@ -51,6 +72,11 @@ void ffPrintWifi(FFWifiOptions* options)
                     {
                         ffStrbufAppendS(&buffer, " - ");
                         ffStrbufAppend(&buffer, &item->conn.protocol);
+                    }
+                    if (bandStr[0])
+                    {
+                        ffStrbufAppendF(&buffer, " - %s%sGHz", bandStr,
+                            instance.config.display.freqSpaceBeforeUnit == FF_SPACE_BEFORE_UNIT_NEVER ? "" : " ");
                     }
                     if(item->conn.security.length)
                     {
@@ -62,7 +88,7 @@ void ffPrintWifi(FFWifiOptions* options)
 
                 if(item->conn.signalQuality == item->conn.signalQuality)
                 {
-                    if(instance.config.display.percentType & FF_PERCENTAGE_TYPE_NUM_BIT)
+                    if(percentType & FF_PERCENTAGE_TYPE_NUM_BIT)
                         ffPercentAppendNum(&buffer, item->conn.signalQuality, options->percent, buffer.length > 0, &options->moduleArgs);
                 }
 
@@ -77,10 +103,13 @@ void ffPrintWifi(FFWifiOptions* options)
         else
         {
             FF_STRBUF_AUTO_DESTROY percentNum = ffStrbufCreate();
-            ffPercentAppendNum(&percentNum, item->conn.signalQuality, options->percent, false, &options->moduleArgs);
+            if (percentType & FF_PERCENTAGE_TYPE_NUM_BIT)
+                ffPercentAppendNum(&percentNum, item->conn.signalQuality, options->percent, false, &options->moduleArgs);
             FF_STRBUF_AUTO_DESTROY percentBar = ffStrbufCreate();
-            ffPercentAppendBar(&percentBar, item->conn.signalQuality, options->percent, &options->moduleArgs);
-            FF_PRINT_FORMAT_CHECKED(FF_WIFI_MODULE_NAME, moduleIndex, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, FF_WIFI_NUM_FORMAT_ARGS, ((FFformatarg[]){
+            if (percentType & FF_PERCENTAGE_TYPE_BAR_BIT)
+                ffPercentAppendBar(&percentBar, item->conn.signalQuality, options->percent, &options->moduleArgs);
+
+            FF_PRINT_FORMAT_CHECKED(FF_WIFI_MODULE_NAME, moduleIndex, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, ((FFformatarg[]){
                 FF_FORMAT_ARG(item->inf.description, "inf-desc"),
                 FF_FORMAT_ARG(item->inf.status, "inf-status"),
                 FF_FORMAT_ARG(item->conn.status, "status"),
@@ -92,6 +121,8 @@ void ffPrintWifi(FFWifiOptions* options)
                 FF_FORMAT_ARG(item->conn.txRate, "tx-rate"),
                 FF_FORMAT_ARG(item->conn.security, "security"),
                 FF_FORMAT_ARG(percentBar, "signal-quality-bar"),
+                FF_FORMAT_ARG(item->conn.channel, "channel"),
+                FF_FORMAT_ARG(bandStr, "band"),
             }));
         }
 
@@ -105,36 +136,19 @@ void ffPrintWifi(FFWifiOptions* options)
     }
 }
 
-bool ffParseWifiCommandOptions(FFWifiOptions* options, const char* key, const char* value)
-{
-    const char* subKey = ffOptionTestPrefix(key, FF_WIFI_MODULE_NAME);
-    if (!subKey) return false;
-    if (ffOptionParseModuleArgs(key, subKey, value, &options->moduleArgs))
-        return true;
-
-    if (ffPercentParseCommandOptions(key, subKey, value, &options->percent))
-        return true;
-
-    return false;
-}
-
 void ffParseWifiJsonObject(FFWifiOptions* options, yyjson_val* module)
 {
-    yyjson_val *key_, *val;
+    yyjson_val *key, *val;
     size_t idx, max;
-    yyjson_obj_foreach(module, idx, max, key_, val)
+    yyjson_obj_foreach(module, idx, max, key, val)
     {
-        const char* key = yyjson_get_str(key_);
-        if(ffStrEqualsIgnCase(key, "type"))
-            continue;
-
         if (ffJsonConfigParseModuleArgs(key, val, &options->moduleArgs))
             continue;
 
         if (ffPercentParseJsonObject(key, val, &options->percent))
             continue;
 
-        ffPrintError(FF_WIFI_MODULE_NAME, 0, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, "Unknown JSON key %s", key);
+        ffPrintError(FF_WIFI_MODULE_NAME, 0, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, "Unknown JSON key %s", unsafe_yyjson_get_str(key));
     }
 }
 
@@ -176,6 +190,8 @@ void ffGenerateWifiJsonResult(FF_MAYBE_UNUSED FFWifiOptions* options, yyjson_mut
         yyjson_mut_obj_add_real(doc, conn, "signalQuality", wifi->conn.signalQuality);
         yyjson_mut_obj_add_real(doc, conn, "rxRate", wifi->conn.rxRate);
         yyjson_mut_obj_add_real(doc, conn, "txRate", wifi->conn.txRate);
+        yyjson_mut_obj_add_uint(doc, conn, "channel", wifi->conn.channel);
+        yyjson_mut_obj_add_uint(doc, conn, "frequency", wifi->conn.frequency);
     }
 
     FF_LIST_FOR_EACH(FFWifiResult, item, result)
@@ -190,42 +206,40 @@ void ffGenerateWifiJsonResult(FF_MAYBE_UNUSED FFWifiOptions* options, yyjson_mut
     }
 }
 
-void ffPrintWifiHelpFormat(void)
-{
-    FF_PRINT_MODULE_FORMAT_HELP_CHECKED(FF_WIFI_MODULE_NAME, "{4} - {10}", FF_WIFI_NUM_FORMAT_ARGS, ((const char* []) {
-        "Interface description - inf-desc",
-        "Interface status - inf-status",
-        "Connection status - status",
-        "Connection SSID - ssid",
-        "Connection BSSID - bssid",
-        "Connection protocol - protocol",
-        "Connection signal quality (percentage num) - signal-quality",
-        "Connection RX rate - rx-rate",
-        "Connection TX rate - tx-rate",
-        "Connection Security algorithm - security",
-        "Connection signal quality (percentage bar) - signal-quality-bar",
-    }));
-}
-
 void ffInitWifiOptions(FFWifiOptions* options)
 {
-    ffOptionInitModuleBaseInfo(
-        &options->moduleInfo,
-        FF_WIFI_MODULE_NAME,
-        "Print connected Wi-Fi info (SSID, connection and security protocol)",
-        ffParseWifiCommandOptions,
-        ffParseWifiJsonObject,
-        ffPrintWifi,
-        ffGenerateWifiJsonResult,
-        ffPrintWifiHelpFormat,
-        ffGenerateWifiJsonConfig
-    );
     ffOptionInitModuleArg(&options->moduleArgs, "");
 
-    options->percent = (FFColorRangeConfig) { 50, 20 };
+    options->percent = (FFPercentageModuleConfig) { 50, 20, 0 };
 }
 
 void ffDestroyWifiOptions(FFWifiOptions* options)
 {
     ffOptionDestroyModuleArg(&options->moduleArgs);
 }
+
+FFModuleBaseInfo ffWifiModuleInfo = {
+    .name = FF_WIFI_MODULE_NAME,
+    .description = "Print connected Wi-Fi info (SSID, connection and security protocol)",
+    .initOptions = (void*) ffInitWifiOptions,
+    .destroyOptions = (void*) ffDestroyWifiOptions,
+    .parseJsonObject = (void*) ffParseWifiJsonObject,
+    .printModule = (void*) ffPrintWifi,
+    .generateJsonResult = (void*) ffGenerateWifiJsonResult,
+    .generateJsonConfig = (void*) ffGenerateWifiJsonConfig,
+    .formatArgs = FF_FORMAT_ARG_LIST(((FFModuleFormatArg[]) {
+        {"Interface description", "inf-desc"},
+        {"Interface status", "inf-status"},
+        {"Connection status", "status"},
+        {"Connection SSID", "ssid"},
+        {"Connection BSSID", "bssid"},
+        {"Connection protocol", "protocol"},
+        {"Connection signal quality (percentage num)", "signal-quality"},
+        {"Connection RX rate", "rx-rate"},
+        {"Connection TX rate", "tx-rate"},
+        {"Connection Security algorithm", "security"},
+        {"Connection signal quality (percentage bar)", "signal-quality-bar"},
+        {"Connection channel number", "channel"},
+        {"Connection channel band in GHz", "band"},
+    }))
+};

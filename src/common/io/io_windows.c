@@ -3,6 +3,8 @@
 #include "util/stringUtils.h"
 
 #include <windows.h>
+#include <ntstatus.h>
+#include <winternl.h>
 
 static void createSubfolders(const char* fileName)
 {
@@ -38,7 +40,7 @@ bool ffWriteFileData(const char* fileName, size_t dataSize, const void* data)
 
 static inline void readWithLength(HANDLE handle, FFstrbuf* buffer, uint32_t length)
 {
-    ffStrbufEnsureFixedLengthFree(buffer, length);
+    ffStrbufEnsureFree(buffer, length);
     DWORD bytesRead = 0;
     while(
         length > 0 &&
@@ -100,8 +102,59 @@ bool ffAppendFileBuffer(const char* fileName, FFstrbuf* buffer)
     return ffAppendFDBuffer(handle, buffer);
 }
 
+HANDLE openat(HANDLE dfd, const char* fileName, bool directory)
+{
+    NTSTATUS ret;
+    UNICODE_STRING fileNameW;
+    ret = RtlAnsiStringToUnicodeString(&fileNameW, &(ANSI_STRING) {
+        .Length = (USHORT) strlen(fileName),
+        .Buffer = (PCHAR) fileName
+    }, TRUE);
+    if (!NT_SUCCESS(ret)) return INVALID_HANDLE_VALUE;
+
+    FF_AUTO_CLOSE_FD HANDLE hFile;
+    IO_STATUS_BLOCK iosb = {};
+    ret = NtOpenFile(&hFile, FILE_READ_DATA | SYNCHRONIZE, &(OBJECT_ATTRIBUTES) {
+        .Length = sizeof(OBJECT_ATTRIBUTES),
+        .RootDirectory = dfd,
+        .ObjectName = &fileNameW,
+    }, &iosb, FILE_SHARE_READ, FILE_SYNCHRONOUS_IO_NONALERT | (directory ? FILE_DIRECTORY_FILE : FILE_NON_DIRECTORY_FILE));
+    RtlFreeUnicodeString(&fileNameW);
+
+    if(!NT_SUCCESS(ret) || iosb.Information != FILE_OPENED)
+        return INVALID_HANDLE_VALUE;
+
+    return hFile;
+}
+
+bool ffAppendFileBufferRelative(HANDLE dfd, const char* fileName, FFstrbuf* buffer)
+{
+    HANDLE FF_AUTO_CLOSE_FD fd = openat(dfd, fileName, false);
+    if(fd == INVALID_HANDLE_VALUE)
+        return false;
+
+    return ffAppendFDBuffer(fd, buffer);
+}
+
+ssize_t ffReadFileDataRelative(HANDLE dfd, const char* fileName, size_t dataSize, void* data)
+{
+    HANDLE FF_AUTO_CLOSE_FD fd = openat(dfd, fileName, false);
+    if(fd == INVALID_HANDLE_VALUE)
+        return -1;
+
+    return ffReadFDData(fd, dataSize, data);
+}
+
 bool ffPathExpandEnv(const char* in, FFstrbuf* out)
 {
+    if (in[0] == '~') {
+        if ((in[1] == '/' || in[1] == '\\' || in[1] == '\0') && !ffStrContainsC(in, '%')) {
+            ffStrbufSet(out, &instance.state.platform.homeDir);
+            ffStrbufAppendS(out, in + 1);
+            return true;
+        }
+    }
+
     DWORD length = ExpandEnvironmentStringsA(in, NULL, 0);
     if (length <= 1) return false;
 
@@ -114,10 +167,15 @@ bool ffPathExpandEnv(const char* in, FFstrbuf* out)
 
 bool ffSuppressIO(bool suppress)
 {
+    #ifndef NDEBUG
+    if (instance.config.display.debugMode)
+        return false;
+    #endif
+
     static bool init = false;
     static HANDLE hOrigOut = INVALID_HANDLE_VALUE;
     static HANDLE hOrigErr = INVALID_HANDLE_VALUE;
-    static HANDLE hNullFile = INVALID_HANDLE_VALUE;
+    HANDLE hNullFile = ffGetNullFD();
     static int fOrigOut = -1;
     static int fOrigErr = -1;
     static int fNullFile = -1;
@@ -129,7 +187,6 @@ bool ffSuppressIO(bool suppress)
 
         hOrigOut = GetStdHandle(STD_OUTPUT_HANDLE);
         hOrigErr = GetStdHandle(STD_ERROR_HANDLE);
-        hNullFile = CreateFileW(L"NUL", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_WRITE, 0, OPEN_EXISTING, 0, NULL);
         fOrigOut = _dup(STDOUT_FILENO);
         fOrigErr = _dup(STDERR_FILENO);
         fNullFile = _open_osfhandle((intptr_t) hNullFile, 0);
@@ -266,14 +323,24 @@ const char* ffGetTerminalResponse(const char* request, int nParams, const char* 
     {
         DWORD bytes = 0;
         if (!ReadFile(hInput, buffer, sizeof(buffer) - 1, &bytes, NULL) || bytes == 0)
+        {
+            va_end(args);
             return "ReadFile() failed";
+        }
 
         bytesRead += bytes;
         buffer[bytesRead] = '\0';
 
+        va_list cargs;
+        va_copy(cargs, args);
         int ret = vsscanf(buffer, format, args);
+        va_end(cargs);
+
         if (ret <= 0)
+        {
+            va_end(args);
             return "vsscanf(buffer, format, args) failed";
+        }
         if (ret >= nParams)
             break;
     }
@@ -283,4 +350,24 @@ const char* ffGetTerminalResponse(const char* request, int nParams, const char* 
     va_end(args);
 
     return NULL;
+}
+
+FFNativeFD ffGetNullFD(void)
+{
+    static FFNativeFD hNullFile = INVALID_HANDLE_VALUE;
+    if (hNullFile != INVALID_HANDLE_VALUE)
+        return hNullFile;
+    hNullFile = CreateFileW(
+        L"NUL",
+        GENERIC_READ | GENERIC_WRITE,
+        FILE_SHARE_WRITE,
+        0,
+        OPEN_EXISTING,
+        0,
+        &(SECURITY_ATTRIBUTES){
+            .nLength = sizeof(SECURITY_ATTRIBUTES),
+            .lpSecurityDescriptor = NULL,
+            .bInheritHandle = TRUE,
+        });
+    return hNullFile;
 }

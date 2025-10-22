@@ -4,8 +4,6 @@
 #include "modules/command/command.h"
 #include "util/stringUtils.h"
 
-#define FF_COMMAND_NUM_FORMAT_ARGS 1
-
 void ffPrintCommand(FFCommandOptions* options)
 {
     FF_STRBUF_AUTO_DESTROY result = ffStrbufCreate();
@@ -39,72 +37,40 @@ void ffPrintCommand(FFCommandOptions* options)
     }
     else
     {
-        FF_PRINT_FORMAT_CHECKED(FF_COMMAND_MODULE_NAME, 0, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, FF_COMMAND_NUM_FORMAT_ARGS, ((FFformatarg[]){
+        FF_PRINT_FORMAT_CHECKED(FF_COMMAND_MODULE_NAME, 0, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, ((FFformatarg[]){
             FF_FORMAT_ARG(result, "result")
         }));
     }
 }
 
-bool ffParseCommandCommandOptions(FFCommandOptions* options, const char* key, const char* value)
-{
-    const char* subKey = ffOptionTestPrefix(key, FF_COMMAND_MODULE_NAME);
-    if (!subKey) return false;
-    if (ffOptionParseModuleArgs(key, subKey, value, &options->moduleArgs))
-        return true;
-
-    if(ffStrEqualsIgnCase(subKey, "shell"))
-    {
-        ffOptionParseString(key, value, &options->shell);
-        return true;
-    }
-
-    if(ffStrEqualsIgnCase(subKey, "param"))
-    {
-        ffOptionParseString(key, value, &options->param);
-        return true;
-    }
-
-    if(ffStrEqualsIgnCase(subKey, "text"))
-    {
-        ffOptionParseString(key, value, &options->text);
-        return true;
-    }
-
-    return false;
-}
-
 void ffParseCommandJsonObject(FFCommandOptions* options, yyjson_val* module)
 {
-    yyjson_val *key_, *val;
+    yyjson_val *key, *val;
     size_t idx, max;
-    yyjson_obj_foreach(module, idx, max, key_, val)
+    yyjson_obj_foreach(module, idx, max, key, val)
     {
-        const char* key = yyjson_get_str(key_);
-        if(ffStrEqualsIgnCase(key, "type"))
-            continue;
-
         if (ffJsonConfigParseModuleArgs(key, val, &options->moduleArgs))
             continue;
 
-        if (ffStrEqualsIgnCase(key, "shell"))
+        if (unsafe_yyjson_equals_str(key, "shell"))
         {
-            ffStrbufSetS(&options->shell, yyjson_get_str(val));
+            ffStrbufSetJsonVal(&options->shell, val);
             continue;
         }
 
-        if (ffStrEqualsIgnCase(key, "param"))
+        if (unsafe_yyjson_equals_str(key, "param"))
         {
-            ffStrbufSetS(&options->param, yyjson_get_str(val));
+            ffStrbufSetJsonVal(&options->param, val);
             continue;
         }
 
-        if (ffStrEqualsIgnCase(key, "text"))
+        if (unsafe_yyjson_equals_str(key, "text"))
         {
-            ffStrbufSetS(&options->text, yyjson_get_str(val));
+            ffStrbufSetJsonVal(&options->text, val);
             continue;
         }
 
-        ffPrintError(FF_COMMAND_MODULE_NAME, 0, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, "Unknown JSON key %s", key);
+        ffPrintError(FF_COMMAND_MODULE_NAME, 0, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, "Unknown JSON key %s", unsafe_yyjson_get_str(key));
     }
 }
 
@@ -154,26 +120,8 @@ void ffGenerateCommandJsonResult(FF_MAYBE_UNUSED FFCommandOptions* options, yyjs
     yyjson_mut_obj_add_strbuf(doc, module, "result", &result);
 }
 
-void ffPrintCommandHelpFormat(void)
-{
-    FF_PRINT_MODULE_FORMAT_HELP_CHECKED(FF_COMMAND_MODULE_NAME, "{1}", FF_COMMAND_NUM_FORMAT_ARGS, ((const char* []) {
-        "Command result - result"
-    }));
-}
-
 void ffInitCommandOptions(FFCommandOptions* options)
 {
-    ffOptionInitModuleBaseInfo(
-        &options->moduleInfo,
-        FF_COMMAND_MODULE_NAME,
-        "Running custom shell scripts",
-        ffParseCommandCommandOptions,
-        ffParseCommandJsonObject,
-        ffPrintCommand,
-        ffGenerateCommandJsonResult,
-        ffPrintCommandHelpFormat,
-        ffGenerateCommandJsonConfig
-    );
     ffOptionInitModuleArg(&options->moduleArgs, "");
 
     ffStrbufInitStatic(&options->shell,
@@ -200,3 +148,17 @@ void ffDestroyCommandOptions(FFCommandOptions* options)
     ffStrbufDestroy(&options->param);
     ffStrbufDestroy(&options->text);
 }
+
+FFModuleBaseInfo ffCommandModuleInfo = {
+    .name = FF_COMMAND_MODULE_NAME,
+    .description = "Run custom shell scripts",
+    .initOptions = (void*) ffInitCommandOptions,
+    .destroyOptions = (void*) ffDestroyCommandOptions,
+    .parseJsonObject = (void*) ffParseCommandJsonObject,
+    .printModule = (void*) ffPrintCommand,
+    .generateJsonResult = (void*) ffGenerateCommandJsonResult,
+    .generateJsonConfig = (void*) ffGenerateCommandJsonConfig,
+    .formatArgs = FF_FORMAT_ARG_LIST(((FFModuleFormatArg[]) {
+        {"Command result", "result"},
+    }))
+};

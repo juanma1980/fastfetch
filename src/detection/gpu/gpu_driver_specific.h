@@ -2,20 +2,13 @@
 
 #include "gpu.h"
 
-typedef enum FFGpuDriverConditionType
+typedef enum __attribute__((__packed__)) FFGpuDriverConditionType
 {
     FF_GPU_DRIVER_CONDITION_TYPE_BUS_ID = 1 << 0,
     FF_GPU_DRIVER_CONDITION_TYPE_DEVICE_ID = 1 << 1,
     FF_GPU_DRIVER_CONDITION_TYPE_LUID = 1 << 2,
+    FF_GPU_DRIVER_CONDITION_TYPE_FORCE_UNSIGNED = UINT8_MAX,
 } FFGpuDriverConditionType;
-
-typedef struct FFGpuDriverPciBusId
-{
-    uint32_t domain;
-    uint32_t bus;
-    uint32_t device;
-    uint32_t func;
-} FFGpuDriverPciBusId;
 
 typedef struct FFGpuDriverPciDeviceId
 {
@@ -37,8 +30,11 @@ typedef struct FFGpuDriverCondition
 // detect x if not NULL
 typedef struct FFGpuDriverResult
 {
+    uint32_t* index;
     double* temp;
     FFGPUMemory* memory;
+    FFstrbuf* memoryType;
+    FFGPUMemory* sharedMemory;
     uint32_t* coreCount;
     double* coreUsage;
     FFGPUType* type;
@@ -85,9 +81,9 @@ FF_MAYBE_UNUSED static inline bool getDriverSpecificDetectionFn(const char* vend
     {
         *pDetectFn = ffDetectAmdGpuInfo;
         #ifdef _WIN64
-            *pDllName = "amd_ags_x64.dll";
+            *pDllName = "atiadlxx.dll";
         #else
-            *pDllName = "amd_ags_x86.dll";
+            *pDllName = "atiadlxy.dll";
         #endif
     }
     #endif

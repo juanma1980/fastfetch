@@ -1,6 +1,7 @@
 #pragma once
 
 #include "fastfetch.h"
+#include "modules/netio/option.h"
 
 typedef struct FFNetIOResult
 {
@@ -17,3 +18,4 @@ typedef struct FFNetIOResult
 } FFNetIOResult;
 
 const char* ffDetectNetIO(FFlist* result, FFNetIOOptions* options);
+const char* ffNetIOGetIoCounters(FFlist* result, FFNetIOOptions* options);

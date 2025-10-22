@@ -6,12 +6,11 @@
 #include "util/stringUtils.h"
 
 #define FF_CPUUSAGE_DISPLAY_NAME "CPU Usage"
-#define FF_CPUUSAGE_NUM_FORMAT_ARGS 8
 
 void ffPrintCPUUsage(FFCPUUsageOptions* options)
 {
     FF_LIST_AUTO_DESTROY percentages = ffListCreate(sizeof(double));
-    const char* error = ffGetCpuUsageResult(&percentages);
+    const char* error = ffGetCpuUsageResult(options, &percentages);
 
     if(error)
     {
@@ -28,6 +27,12 @@ void ffPrintCPUUsage(FFCPUUsageOptions* options)
         if (*percent == *percent)
         {
             sumValue += *percent;
+
+            #if WIN32
+            // Windows may return values greater than 100%, cap them to 100%
+            if (*percent > 100) *percent = 100;
+            #endif
+
             if (*percent > maxValue)
             {
                 maxValue = *percent;
@@ -43,6 +48,12 @@ void ffPrintCPUUsage(FFCPUUsageOptions* options)
         ++index;
     }
     double avgValue = sumValue / (double) valueCount;
+    #if WIN32
+    // See above comment
+    if (avgValue > 100) avgValue = 100;
+    #endif
+
+    FFPercentageTypeFlags percentType = options->percent.type == 0 ? instance.config.display.percentType : options->percent.type;
 
     if(options->moduleArgs.outputFormat.length == 0)
     {
@@ -51,9 +62,9 @@ void ffPrintCPUUsage(FFCPUUsageOptions* options)
         FF_STRBUF_AUTO_DESTROY str = ffStrbufCreate();
         if (!options->separate)
         {
-            if(instance.config.display.percentType & FF_PERCENTAGE_TYPE_BAR_BIT)
+            if(percentType & FF_PERCENTAGE_TYPE_BAR_BIT)
                 ffPercentAppendBar(&str, avgValue, options->percent, &options->moduleArgs);
-            if(instance.config.display.percentType & FF_PERCENTAGE_TYPE_NUM_BIT)
+            if(percentType & FF_PERCENTAGE_TYPE_NUM_BIT)
             {
                 if(str.length > 0)
                     ffStrbufAppendC(&str, ' ');
@@ -74,18 +85,25 @@ void ffPrintCPUUsage(FFCPUUsageOptions* options)
     else
     {
         FF_STRBUF_AUTO_DESTROY avgNum = ffStrbufCreate();
-        ffPercentAppendNum(&avgNum, avgValue, options->percent, false, &options->moduleArgs);
+        if (percentType & FF_PERCENTAGE_TYPE_NUM_BIT)
+            ffPercentAppendNum(&avgNum, avgValue, options->percent, false, &options->moduleArgs);
         FF_STRBUF_AUTO_DESTROY avgBar = ffStrbufCreate();
-        ffPercentAppendBar(&avgBar, avgValue, options->percent, &options->moduleArgs);
+        if (percentType & FF_PERCENTAGE_TYPE_BAR_BIT)
+            ffPercentAppendBar(&avgBar, avgValue, options->percent, &options->moduleArgs);
         FF_STRBUF_AUTO_DESTROY minNum = ffStrbufCreate();
-        ffPercentAppendNum(&minNum, minValue, options->percent, false, &options->moduleArgs);
+        if (percentType & FF_PERCENTAGE_TYPE_NUM_BIT)
+            ffPercentAppendNum(&minNum, minValue, options->percent, false, &options->moduleArgs);
         FF_STRBUF_AUTO_DESTROY minBar = ffStrbufCreate();
-        ffPercentAppendBar(&minBar, minValue, options->percent, &options->moduleArgs);
+        if (percentType & FF_PERCENTAGE_TYPE_BAR_BIT)
+            ffPercentAppendBar(&minBar, minValue, options->percent, &options->moduleArgs);
         FF_STRBUF_AUTO_DESTROY maxNum = ffStrbufCreate();
-        ffPercentAppendNum(&maxNum, maxValue, options->percent, false, &options->moduleArgs);
+        if (percentType & FF_PERCENTAGE_TYPE_NUM_BIT)
+            ffPercentAppendNum(&maxNum, maxValue, options->percent, false, &options->moduleArgs);
         FF_STRBUF_AUTO_DESTROY maxBar = ffStrbufCreate();
-        ffPercentAppendBar(&maxBar, maxValue, options->percent, &options->moduleArgs);
-        FF_PRINT_FORMAT_CHECKED(FF_CPUUSAGE_DISPLAY_NAME, 0, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, FF_CPUUSAGE_NUM_FORMAT_ARGS, ((FFformatarg[]){
+        if (percentType & FF_PERCENTAGE_TYPE_BAR_BIT)
+            ffPercentAppendBar(&maxBar, maxValue, options->percent, &options->moduleArgs);
+
+        FF_PRINT_FORMAT_CHECKED(FF_CPUUSAGE_DISPLAY_NAME, 0, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, ((FFformatarg[]){
             FF_FORMAT_ARG(avgNum, "avg"),
             FF_FORMAT_ARG(maxNum, "max"),
             FF_FORMAT_ARG(maxIndex, "max-index"),
@@ -98,48 +116,31 @@ void ffPrintCPUUsage(FFCPUUsageOptions* options)
     }
 }
 
-bool ffParseCPUUsageCommandOptions(FFCPUUsageOptions* options, const char* key, const char* value)
-{
-    const char* subKey = ffOptionTestPrefix(key, FF_CPUUSAGE_MODULE_NAME);
-    if (!subKey) return false;
-    if (ffOptionParseModuleArgs(key, subKey, value, &options->moduleArgs))
-        return true;
-
-    if (ffStrEqualsIgnCase(subKey, "separate"))
-    {
-        options->separate = ffOptionParseBoolean(value);
-        return true;
-    }
-
-    if (ffPercentParseCommandOptions(key, subKey, value, &options->percent))
-        return true;
-
-    return false;
-}
-
 void ffParseCPUUsageJsonObject(FFCPUUsageOptions* options, yyjson_val* module)
 {
-    yyjson_val *key_, *val;
+    yyjson_val *key, *val;
     size_t idx, max;
-    yyjson_obj_foreach(module, idx, max, key_, val)
+    yyjson_obj_foreach(module, idx, max, key, val)
     {
-        const char* key = yyjson_get_str(key_);
-        if(ffStrEqualsIgnCase(key, "type"))
-            continue;
-
         if (ffJsonConfigParseModuleArgs(key, val, &options->moduleArgs))
             continue;
 
-        if (ffStrEqualsIgnCase(key, "separate"))
+        if (unsafe_yyjson_equals_str(key, "separate"))
         {
             options->separate = yyjson_get_bool(val);
+            continue;
+        }
+
+        if (unsafe_yyjson_equals_str(key, "waitTime"))
+        {
+            options->waitTime = (uint32_t) yyjson_get_uint(val);
             continue;
         }
 
         if (ffPercentParseJsonObject(key, val, &options->percent))
             continue;
 
-        ffPrintError(FF_CPUUSAGE_MODULE_NAME, 0, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, "Unknown JSON key %s", key);
+        ffPrintError(FF_CPUUSAGE_MODULE_NAME, 0, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, "Unknown JSON key %s", unsafe_yyjson_get_str(key));
     }
 }
 
@@ -156,10 +157,10 @@ void ffGenerateCPUUsageJsonConfig(FFCPUUsageOptions* options, yyjson_mut_doc* do
     ffPercentGenerateJsonConfig(doc, module, defaultOptions.percent, options->percent);
 }
 
-void ffGenerateCPUUsageJsonResult(FF_MAYBE_UNUSED FFCPUUsageOptions* options, yyjson_mut_doc* doc, yyjson_mut_val* module)
+void ffGenerateCPUUsageJsonResult(FFCPUUsageOptions* options, yyjson_mut_doc* doc, yyjson_mut_val* module)
 {
     FF_LIST_AUTO_DESTROY percentages = ffListCreate(sizeof(double));
-    const char* error = ffGetCpuUsageResult(&percentages);
+    const char* error = ffGetCpuUsageResult(options, &percentages);
 
     if(error)
     {
@@ -173,39 +174,36 @@ void ffGenerateCPUUsageJsonResult(FF_MAYBE_UNUSED FFCPUUsageOptions* options, yy
     }
 }
 
-void ffPrintCPUUsageHelpFormat(void)
-{
-    FF_PRINT_MODULE_FORMAT_HELP_CHECKED(FF_CPUUSAGE_MODULE_NAME, "{1}", FF_CPUUSAGE_NUM_FORMAT_ARGS, ((const char* []) {
-        "CPU usage (percentage num, average) - avg",
-        "CPU usage (percentage num, maximum) - max",
-        "CPU core index of maximum usage - max-index",
-        "CPU usage (percentage num, minimum) - min",
-        "CPU core index of minimum usage - min-index",
-        "CPU usage (percentage bar, average) - avg-bar",
-        "CPU usage (percentage bar, maximum) - max-bar",
-        "CPU usage (percentage bar, minimum) - min-bar",
-    }));
-}
-
 void ffInitCPUUsageOptions(FFCPUUsageOptions* options)
 {
-    ffOptionInitModuleBaseInfo(
-        &options->moduleInfo,
-        FF_CPUUSAGE_MODULE_NAME,
-        "Print CPU usage. Costs some time to collect data",
-        ffParseCPUUsageCommandOptions,
-        ffParseCPUUsageJsonObject,
-        ffPrintCPUUsage,
-        ffGenerateCPUUsageJsonResult,
-        ffPrintCPUUsageHelpFormat,
-        ffGenerateCPUUsageJsonConfig
-    );
     ffOptionInitModuleArg(&options->moduleArgs, "󰓅");
     options->separate = false;
-    options->percent = (FFColorRangeConfig) { 50, 80 };
+    options->percent = (FFPercentageModuleConfig) { 50, 80, 0 };
+    options->waitTime = 200;
 }
 
 void ffDestroyCPUUsageOptions(FFCPUUsageOptions* options)
 {
     ffOptionDestroyModuleArg(&options->moduleArgs);
 }
+
+FFModuleBaseInfo ffCPUUsageModuleInfo = {
+    .name = FF_CPUUSAGE_MODULE_NAME,
+    .description = "Print CPU usage. Costs some time to collect data",
+    .initOptions = (void*) ffInitCPUUsageOptions,
+    .destroyOptions = (void*) ffDestroyCPUUsageOptions,
+    .parseJsonObject = (void*) ffParseCPUUsageJsonObject,
+    .printModule = (void*) ffPrintCPUUsage,
+    .generateJsonResult = (void*) ffGenerateCPUUsageJsonResult,
+    .generateJsonConfig = (void*) ffGenerateCPUUsageJsonConfig,
+    .formatArgs = FF_FORMAT_ARG_LIST(((FFModuleFormatArg[]) {
+        {"CPU usage (percentage num, average)", "avg"},
+        {"CPU usage (percentage num, maximum)", "max"},
+        {"CPU core index of maximum usage", "max-index"},
+        {"CPU usage (percentage num, minimum)", "min"},
+        {"CPU core index of minimum usage", "min-index"},
+        {"CPU usage (percentage bar, average)", "avg-bar"},
+        {"CPU usage (percentage bar, maximum)", "max-bar"},
+        {"CPU usage (percentage bar, minimum)", "min-bar"},
+    }))
+};

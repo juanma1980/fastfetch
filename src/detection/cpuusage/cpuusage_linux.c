@@ -8,13 +8,13 @@
 const char* ffGetCpuUsageInfo(FFlist* cpuTimes)
 {
     char buf[PROC_FILE_BUFFSIZ];
-    ssize_t nRead = ffReadFileData("/proc/stat", sizeof(buf) - 1, buf);
+    ssize_t nRead = ffReadFileData("/proc/stat", ARRAY_SIZE(buf) - 1, buf);
     if(nRead < 0)
     {
         #ifdef __ANDROID__
         return "Accessing \"/proc/stat\" is restricted on Android O+";
         #else
-        return "ffReadFileData(\"/proc/stat\", sizeof(buf) - 1, buf) failed";
+        return "ffReadFileData(\"/proc/stat\", ARRAY_SIZE(buf) - 1, buf) failed";
         #endif
     }
     buf[nRead] = '\0';
@@ -31,8 +31,8 @@ const char* ffGetCpuUsageInfo(FFlist* cpuTimes)
     {
         if(sscanf(start, "cpu%*d%" PRIu64 "%" PRIu64 "%" PRIu64 "%" PRIu64 "%" PRIu64 "%" PRIu64 "%" PRIu64 "%*[^\n]\n", &user, &nice, &system, &idle, &iowait, &irq, &softirq) == 7)
         {
-            uint64_t inUse = user + nice + system;
-            uint64_t total = inUse + idle + iowait + irq + softirq;
+            uint64_t inUse = user + nice + system + irq + softirq;
+            uint64_t total = inUse + idle + iowait;
 
             FFCpuUsageInfo* info = (FFCpuUsageInfo*) ffListAdd(cpuTimes);
             *info = (FFCpuUsageInfo) {

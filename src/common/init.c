@@ -1,4 +1,5 @@
 #include "fastfetch.h"
+#include "common/init.h"
 #include "common/parsing.h"
 #include "common/thread.h"
 #include "detection/displayserver/displayserver.h"
@@ -41,14 +42,13 @@ static void defaultConfig(void)
 {
     ffOptionsInitLogo(&instance.config.logo);
     ffOptionsInitGeneral(&instance.config.general);
-    ffOptionsInitModules(&instance.config.modules);
     ffOptionsInitDisplay(&instance.config.display);
 }
 
 void ffInitInstance(void)
 {
     #ifdef WIN32
-        //https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/setlocale-wsetlocale?source=recommendations&view=msvc-170#utf-8-support
+        // https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/setlocale-wsetlocale?source=recommendat>
         setlocale(LC_ALL, ".UTF8");
     #else
         // Never use `setlocale(LC_ALL, "")`
@@ -76,32 +76,30 @@ static void resetConsole(void)
 }
 
 #ifdef _WIN32
-BOOL WINAPI consoleHandler(DWORD signal)
+BOOL WINAPI consoleHandler(FF_MAYBE_UNUSED DWORD signal)
 {
-    FF_UNUSED(signal);
     resetConsole();
     exit(0);
 }
 #else
-static void exitSignalHandler(int signal)
+static void exitSignalHandler(FF_MAYBE_UNUSED int signal)
 {
-    FF_UNUSED(signal);
     resetConsole();
     exit(0);
+}
+static void chldSignalHandler(FF_MAYBE_UNUSED int signal)
+{
+    // empty; used to interrupt the poll and read syscalls
 }
 #endif
 
 void ffStart(void)
 {
-    #ifdef FF_START_DETECTION_THREADS
-        if(instance.config.general.multithreading)
-            startDetectionThreads();
-    #endif
-
     ffDisableLinewrap = instance.config.display.disableLinewrap && !instance.config.display.pipe && !instance.state.resultDoc;
     ffHideCursor = instance.config.display.hideCursor && !instance.config.display.pipe && !instance.state.resultDoc;
 
     #ifdef _WIN32
+    SetErrorMode(SEM_FAILCRITICALERRORS);
     if (instance.config.display.noBuffer)
         setvbuf(stdout, NULL, _IONBF, 0);
     else
@@ -118,6 +116,7 @@ void ffStart(void)
     sigaction(SIGINT, &action, NULL);
     sigaction(SIGTERM, &action, NULL);
     sigaction(SIGQUIT, &action, NULL);
+    sigaction(SIGCHLD, &(struct sigaction) { .sa_handler = chldSignalHandler }, NULL);
     #endif
 
     //reset everything to default before we start printing
@@ -145,7 +144,6 @@ static void destroyConfig(void)
 {
     ffOptionsDestroyLogo(&instance.config.logo);
     ffOptionsDestroyGeneral(&instance.config.general);
-    ffOptionsDestroyModules(&instance.config.modules);
     ffOptionsDestroyDisplay(&instance.config.display);
 }
 
@@ -179,17 +177,14 @@ void ffListFeatures(void)
         #if FF_HAVE_XCB_RANDR
             "xcb-randr\n"
         #endif
-        #if FF_HAVE_XCB
-            "xcb\n"
-        #endif
         #if FF_HAVE_XRANDR
             "xrandr\n"
         #endif
-        #if FF_HAVE_X11
-            "x11\n"
-        #endif
         #if FF_HAVE_DRM
             "drm\n"
+        #endif
+        #if FF_HAVE_DRM_AMDGPU
+            "drm_amdgpu\n"
         #endif
         #if FF_HAVE_GIO
             "gio\n"
@@ -227,14 +222,14 @@ void ffListFeatures(void)
         #if FF_HAVE_GLX
             "glx\n"
         #endif
-        #if FF_HAVE_OSMESA
-            "osmesa\n"
-        #endif
         #if FF_HAVE_OPENCL
             "opencl\n"
         #endif
         #if FF_HAVE_FREETYPE
             "freetype\n"
+        #endif
+        #if FF_HAVE_PCIACCESS
+            "libpciaccess\n"
         #endif
         #if FF_HAVE_PULSE
             "libpulse\n"
@@ -242,7 +237,7 @@ void ffListFeatures(void)
         #if FF_HAVE_DDCUTIL
             "libddcutil\n"
         #endif
-        #if FF_HAVE_ELF || __sun || __FreeBSD__
+        #if FF_HAVE_ELF || __sun || (__FreeBSD__ && !__DragonFly__) || __OpenBSD__ || __NetBSD__
             "libelf\n"
         #endif
         #if FF_HAVE_LIBZFS
@@ -259,6 +254,9 @@ void ffListFeatures(void)
         #endif
         #if FF_HAVE_LINUX_WIRELESS
             "linux/wireless\n"
+        #endif
+        #if FF_HAVE_EMBEDDED_PCIIDS
+            "Embedded pciids\n"
         #endif
         ""
     , stdout);

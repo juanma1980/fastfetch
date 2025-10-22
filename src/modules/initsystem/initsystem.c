@@ -4,7 +4,6 @@
 #include "modules/initsystem/initsystem.h"
 #include "util/stringUtils.h"
 
-#define FF_INITSYSTEM_NUM_FORMAT_ARGS 4
 #define FF_INITSYSTEM_DISPLAY_NAME "Init System"
 
 void ffPrintInitSystem(FFInitSystemOptions* options)
@@ -35,7 +34,7 @@ void ffPrintInitSystem(FFInitSystemOptions* options)
     }
     else
     {
-        FF_PRINT_FORMAT_CHECKED(FF_INITSYSTEM_DISPLAY_NAME, 0, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, FF_INITSYSTEM_NUM_FORMAT_ARGS, ((FFformatarg[]) {
+        FF_PRINT_FORMAT_CHECKED(FF_INITSYSTEM_DISPLAY_NAME, 0, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, ((FFformatarg[]) {
             FF_FORMAT_ARG(result.name, "name"),
             FF_FORMAT_ARG(result.exe, "exe"),
             FF_FORMAT_ARG(result.version, "version"),
@@ -49,30 +48,16 @@ exit:
     ffStrbufDestroy(&result.version);
 }
 
-bool ffParseInitSystemCommandOptions(FFInitSystemOptions* options, const char* key, const char* value)
-{
-    const char* subKey = ffOptionTestPrefix(key, FF_INITSYSTEM_MODULE_NAME);
-    if (!subKey) return false;
-    if (ffOptionParseModuleArgs(key, subKey, value, &options->moduleArgs))
-        return true;
-
-    return false;
-}
-
 void ffParseInitSystemJsonObject(FFInitSystemOptions* options, yyjson_val* module)
 {
-    yyjson_val *key_, *val;
+    yyjson_val *key, *val;
     size_t idx, max;
-    yyjson_obj_foreach(module, idx, max, key_, val)
+    yyjson_obj_foreach(module, idx, max, key, val)
     {
-        const char* key = yyjson_get_str(key_);
-        if(ffStrEqualsIgnCase(key, "type"))
-            continue;
-
         if (ffJsonConfigParseModuleArgs(key, val, &options->moduleArgs))
             continue;
 
-        ffPrintError(FF_INITSYSTEM_DISPLAY_NAME, 0, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, "Unknown JSON key %s", key);
+        ffPrintError(FF_INITSYSTEM_DISPLAY_NAME, 0, &options->moduleArgs, FF_PRINT_TYPE_DEFAULT, "Unknown JSON key %s", unsafe_yyjson_get_str(key));
     }
 }
 
@@ -113,29 +98,8 @@ exit:
     ffStrbufDestroy(&result.version);
 }
 
-void ffPrintInitSystemHelpFormat(void)
-{
-    FF_PRINT_MODULE_FORMAT_HELP_CHECKED(FF_INITSYSTEM_DISPLAY_NAME, "{1}", FF_INITSYSTEM_NUM_FORMAT_ARGS, ((const char* []) {
-        "init system name - name",
-        "init system exe path - exe",
-        "init system version path - version",
-        "init system pid - pid",
-    }));
-}
-
 void ffInitInitSystemOptions(FFInitSystemOptions* options)
 {
-    ffOptionInitModuleBaseInfo(
-        &options->moduleInfo,
-        FF_INITSYSTEM_MODULE_NAME,
-        "Print init system (pid 1) name and version",
-        ffParseInitSystemCommandOptions,
-        ffParseInitSystemJsonObject,
-        ffPrintInitSystem,
-        ffGenerateInitSystemJsonResult,
-        ffPrintInitSystemHelpFormat,
-        ffGenerateInitSystemJsonConfig
-    );
     ffOptionInitModuleArg(&options->moduleArgs, "󰿄");
 }
 
@@ -143,3 +107,20 @@ void ffDestroyInitSystemOptions(FFInitSystemOptions* options)
 {
     ffOptionDestroyModuleArg(&options->moduleArgs);
 }
+
+FFModuleBaseInfo ffInitSystemModuleInfo = {
+    .name = FF_INITSYSTEM_MODULE_NAME,
+    .description = "Print init system (pid 1) name and version",
+    .initOptions = (void*) ffInitInitSystemOptions,
+    .destroyOptions = (void*) ffDestroyInitSystemOptions,
+    .parseJsonObject = (void*) ffParseInitSystemJsonObject,
+    .printModule = (void*) ffPrintInitSystem,
+    .generateJsonResult = (void*) ffGenerateInitSystemJsonResult,
+    .generateJsonConfig = (void*) ffGenerateInitSystemJsonConfig,
+    .formatArgs = FF_FORMAT_ARG_LIST(((FFModuleFormatArg[]) {
+        {"Init system name", "name"},
+        {"Init system exe path", "exe"},
+        {"Init system version path", "version"},
+        {"Init system pid", "pid"},
+    }))
+};
